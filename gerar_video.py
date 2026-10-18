@@ -162,7 +162,9 @@ A concatenação dos trechos narracao DEVE reproduzir TODO o roteiro, na ordem,
 sem omitir, repetir ou alterar palavras. Cada trecho tem uma ação visual principal,
 8 a 20 palavras e termina numa pausa natural. Use trechos menores no gancho e
 na escalada/clímax. Visual e busca devem representar exatamente a ação narrada,
-sem objetos ou personagens extras. Repita as características do protagonista e
+sem objetos ou personagens extras. Para suspense, prefira ambientes cotidianos,
+detalhes de objetos e iluminação. Os visuais devem ser adequados ao público geral,
+sem violência, ferimentos ou figuras ameaçadoras. Repita as características do protagonista e
 cenário para manter continuidade. Não dependa de texto legível nas imagens.
 Use corte="suave" só em passagem de tempo ou ambientação; use "seco" no gancho,
 nas descobertas e na revelação. A imagem de uma cena não deve antecipar a próxima.
@@ -414,6 +416,56 @@ def montar_banco_de_clipes(palavras_chave: list, pasta: Path) -> list:
 # ----------------------------------------------------------------
 # 4a-2. Gerar imagem com IA (Stability AI) + efeito Ken Burns
 # ----------------------------------------------------------------
+class ImagemModeradaError(RuntimeError):
+    """Pedido recusado pelo sistema de moderação do provedor."""
+
+
+def visual_de_ambiente(cena: str) -> str:
+    """Substitui a ação por um plano do cenário, sem tentar reproduzir o conteúdo recusado."""
+    locais = {
+        "living room": "an empty living room in an apartment",
+        "bedroom": "an empty bedroom in an apartment",
+        "kitchen": "an empty kitchen in an apartment",
+        "hallway": "an empty hallway in an apartment building",
+        "corridor": "an empty corridor in a building",
+        "bathroom": "an empty bathroom in an apartment",
+        "forest": "a quiet forest path",
+        "road": "a quiet country road",
+        "street": "a quiet city street",
+        "office": "an empty office",
+        "hotel": "an empty hotel lobby",
+        "car": "the interior of a parked car",
+    }
+    texto = cena.lower()
+    candidatos = [(m.start(), descricao) for palavra, descricao in locais.items()
+                  if (m := re.search(r"\b" + re.escape(palavra) + r"\b", texto))]
+    local = min(candidatos)[1] if candidatos else "an empty room in an apartment"
+    return (f"Architectural establishing photograph of {local}, "
+            "soft indirect lighting, natural materials, realistic proportions, "
+            "neutral everyday setting, unoccupied, cinematic composition, vertical frame")
+
+
+def gerar_imagem_com_alternativa(cena: str, destino: Path):
+    registro = destino.with_suffix(".alternativa.json")
+    if registro.exists():
+        alternativa = json.loads(registro.read_text(encoding="utf-8"))
+        if alternativa.get("original") != cena:
+            raise ValueError("O plano mudou desde a tentativa anterior; revise o registro da cena.")
+        # Uma retomada explícita utiliza diretamente o plano alternativo já registrado.
+        gerar_imagem_stability(alternativa["visual"], destino)
+        return
+    try:
+        gerar_imagem_stability(cena, destino)
+    except ImagemModeradaError:
+        visual = visual_de_ambiente(cena)
+        registro.write_text(json.dumps({"original": cena, "visual": visual,
+            "motivo": "content_moderation", "tipo": "plano de ambiente sem personagens"},
+            ensure_ascii=False, indent=2), encoding="utf-8")
+        print("    Cena recusada por moderação. Tentando uma única alternativa de ambiente, "
+              "sem personagens ou ações. Se aceita, a imagem poderá ser cobrada.")
+        gerar_imagem_stability(visual, destino)
+
+
 def gerar_imagem_stability(prompt: str, destino_png: Path):
     """Gera uma imagem vertical (9:16) usando a API da Stability AI."""
     # Geradores de imagem por IA costumam "inventar" texto ilegível em
@@ -460,7 +512,9 @@ def gerar_imagem_stability(prompt: str, destino_png: Path):
         if chave:
             detalhe = detalhe.replace(chave, "[CHAVE OCULTA]")
             nome = nome.replace(chave, "[CHAVE OCULTA]")
-        raise RuntimeError(
+        tipo_erro = (ImagemModeradaError if resp.status_code == 403
+                     and nome == "content_moderation" else RuntimeError)
+        raise tipo_erro(
             f"Stability HTTP {resp.status_code}: {nome or 'sem código de motivo'}. "
             f"Detalhes: {detalhe}. Os arquivos concluídos foram preservados. "
             "Não haverá nova chamada automática para essa imagem.")
@@ -528,7 +582,7 @@ def montar_banco_de_imagens(cenas: list, pasta: Path, duracoes: list | None = No
                                check=True, capture_output=True, timeout=30)
                 print(f"    Reutilizando imagem_{i}.png (sem chamada à API)")
             else:
-                gerar_imagem_stability(cena, imagem_path)
+                gerar_imagem_com_alternativa(cena, imagem_path)
             gerar_clipe_com_ken_burns(
                 imagem_path, clipe_path, pasta,
                 duracao=duracoes[i] if duracoes else MAX_SEGUNDOS_POR_CLIPE,
@@ -826,4 +880,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (RuntimeError, ValueError) as erro:
+        print(f"\nERRO: {erro}")
+        raise SystemExit(1)
