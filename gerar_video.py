@@ -14,8 +14,10 @@ Como usar:
 """
 
 import os
+import argparse
 import json
 import random
+import re
 import subprocess
 import asyncio
 from datetime import datetime
@@ -152,16 +154,35 @@ IMPORTANTE: evite cenas centradas em placas, letreiros, painéis, jornais ou qua
 que dependa de texto legível — geradores de imagem por IA erram muito ao escrever texto, e
 isso passa impressão de descuido. Prefira ambientes, objetos e silhuetas sem texto."""
 
-    msg = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1500,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    texto = msg.content[0].text.strip()
-    # remove possíveis cercas de markdown, caso a IA adicione por engano
-    texto = texto.replace("```json", "").replace("```", "").strip()
-    dados = json.loads(texto)
-    return dados
+    prompt += """
+Além das chaves anteriores, inclua "plano_cenas": uma lista de 10 a 16 objetos:
+{"narracao": "trecho literal do roteiro", "visual": "descrição em inglês",
+ "busca": "termos concretos em inglês", "corte": "seco"}.
+A concatenação dos trechos narracao DEVE reproduzir TODO o roteiro, na ordem,
+sem omitir, repetir ou alterar palavras. Cada trecho tem uma ação visual principal,
+8 a 20 palavras e termina numa pausa natural. Use trechos menores no gancho e
+na escalada/clímax. Visual e busca devem representar exatamente a ação narrada,
+sem objetos ou personagens extras. Repita as características do protagonista e
+cenário para manter continuidade. Não dependa de texto legível nas imagens.
+Use corte="suave" só em passagem de tempo ou ambientação; use "seco" no gancho,
+nas descobertas e na revelação. A imagem de uma cena não deve antecipar a próxima.
+"""
+    for tentativa in range(3):
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=4500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        texto = msg.content[0].text.strip()
+        texto = texto.replace("```json", "").replace("```", "").strip()
+        try:
+            dados = json.loads(texto)
+            validar_plano_cenas(dados)
+            return dados
+        except (ValueError, TypeError, KeyError, AttributeError) as erro:
+            if tentativa == 2:
+                raise ValueError("Não foi possível gerar um plano de cenas válido após 3 tentativas.") from erro
+            print("    Plano de cenas inválido; solicitando um novo roteiro...")
 
 
 # ----------------------------------------------------------------
@@ -212,21 +233,14 @@ def gerar_voz(texto: str, audio_path: Path):
 
 
 # ----------------------------------------------------------------
-# 3b. Gerar legenda ANIMADA baseada no tempo (não depende do edge-tts
-# informar a temporização de cada palavra, que se mostrou pouco confiável).
-# Divide o texto em blocos pequenos e distribui igualmente ao longo da
-# duração real do áudio. Formato .ass (em vez de .srt simples), porque o
-# .ass permite animação — cada bloco "nasce" na tela com um efeito de pop
-# (cresce de 60% até o tamanho normal em 120ms), em vez de só aparecer e
-# sumir sem transição.
+# 3b. Legendas por pontuação, temporizadas dentro de cada cena narrada.
 # ----------------------------------------------------------------
 def _formatar_tempo_ass(segundos: float) -> str:
-    cs = int(round((segundos % 1) * 100))  # centésimos de segundo
-    total_s = int(segundos)
-    h = total_s // 3600
-    m = (total_s % 3600) // 60
-    s = total_s % 60
-    return f"{h:01d}:{m:02d}:{s:02d}.{cs:02d}"
+    total_cs = max(0, round(segundos * 100))
+    total_s, cs = divmod(total_cs, 100)
+    h, resto = divmod(total_s, 3600)
+    m, segundo = divmod(resto, 60)
+    return f"{h}:{m:02d}:{segundo:02d}.{cs:02d}"
 
 
 CABECALHO_ASS = """[Script Info]
@@ -237,49 +251,105 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,90,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,6,0,2,10,10,300,1
+Style: Default,Arial,76,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,6,0,2,90,90,320,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
 
-def gerar_legenda_por_tempo(
-    texto: str, duracao_total: float, legenda_path: Path, palavras_por_bloco: int = 4
-):
+def dividir_legendas(texto: str, limite: int = 6) -> list[str]:
+    """Prefere pontuação e não deixa conectivos soltos no final do bloco."""
+    conectivos = {"a", "o", "as", "os", "um", "uma", "de", "do", "da", "dos",
+                  "das", "em", "no", "na", "nos", "nas", "por", "para", "com",
+                  "e", "mas", "que", "meu", "minha", "seu", "sua"}
     palavras = texto.split()
-    if not palavras:
-        legenda_path.write_text(CABECALHO_ASS, encoding="utf-8")
-        return
+    blocos = []
+    while palavras:
+        n = min(limite, len(palavras))
+        for i, palavra in enumerate(palavras[:n]):
+            if re.search(r"[.!?;,:…][\"'”’]*$", palavra):
+                n = i + 1
+                break
+        while n > 1 and palavras[n - 1].lower() in conectivos:
+            n -= 1
+        # Limita largura sem depender de quebra automática junto à margem.
+        while n > 1 and len(" ".join(palavras[:n])) > 38:
+            n -= 1
+        while n > 1 and palavras[n - 1].lower() in conectivos:
+            n -= 1
+        blocos.append(" ".join(palavras[:n]))
+        palavras = palavras[n:]
+    return blocos
 
-    blocos = [
-        palavras[i:i + palavras_por_bloco]
-        for i in range(0, len(palavras), palavras_por_bloco)
-    ]
-    textos_dos_blocos = [" ".join(b).replace("\n", " ") for b in blocos]
 
-    # Duração proporcional ao tamanho de cada bloco (em caracteres), não
-    # dividida igualmente. Blocos com palavras mais longas levam mais tempo
-    # pra falar na vida real, então também recebem mais tempo de tela —
-    # isso evita que a legenda "adiante" ou "atrase" em relação à voz ao
-    # longo do vídeo, como acontecia com a divisão igual anterior.
-    pesos = [max(len(t), 1) for t in textos_dos_blocos]
-    peso_total = sum(pesos)
-
+def gerar_legenda_por_tempo(
+    texto: str, duracao_total: float, legenda_path: Path,
+    palavras_por_bloco: int = 6, segmentos: list | None = None,
+):
+    # Com segmentos, cada cena usa seu próprio áudio medido: não acumula
+    # o desvio de uma estimativa feita sobre a narração inteira.
+    segmentos = segmentos if segmentos is not None else [
+        {"narracao": texto, "inicio": 0, "duracao": duracao_total}]
     linhas = [CABECALHO_ASS]
-    acumulado = 0.0
-    for i, (bloco, texto_bloco, peso) in enumerate(zip(blocos, textos_dos_blocos, pesos)):
-        inicio = acumulado
-        duracao_bloco = duracao_total * peso / peso_total
-        fim = inicio + duracao_bloco
-        acumulado = fim
-        tags = r"{\fscx60\fscy60\t(0,120,\fscx100\fscy100)}"
-        linhas.append(
-            f"Dialogue: 0,{_formatar_tempo_ass(inicio)},{_formatar_tempo_ass(fim)},"
-            f"Default,,0,0,0,,{tags}{texto_bloco}"
-        )
-
+    for cena in segmentos:
+        blocos = dividir_legendas(cena["narracao"], palavras_por_bloco)
+        pesos = [len(t) + 6 * bool(re.search(r"[.!?,;:]$", t)) for t in blocos]
+        total = sum(pesos)
+        acumulado = cena["inicio"]
+        for bloco, peso in zip(blocos, pesos):
+            fim = acumulado + cena["duracao"] * peso / total
+            seguro = bloco.replace("\\", " ").replace("{", "").replace("}", "")
+            tags = r"{\fad(60,60)}"
+            linhas.append(
+                f"Dialogue: 0,{_formatar_tempo_ass(acumulado)},{_formatar_tempo_ass(fim)},"
+                f"Default,,0,0,0,,{tags}{seguro}")
+            acumulado = fim
     legenda_path.write_text("\n".join(linhas), encoding="utf-8")
+
+
+def validar_plano_cenas(dados: dict):
+    cenas = dados.get("plano_cenas", [])
+    if not isinstance(cenas, list) or not 10 <= len(cenas) <= 16:
+        raise ValueError("O roteiro precisa de 10 a 16 cenas alinhadas à narração.")
+    for cena in cenas:
+        if not isinstance(cena, dict):
+            raise ValueError("Cena precisa ser um objeto.")
+        if any(not isinstance(cena.get(k), str) or not cena[k].strip()
+               for k in ("narracao", "visual", "busca")):
+            raise ValueError("Cena sem narração, visual ou busca.")
+        if cena.get("corte") not in ("seco", "suave"):
+            raise ValueError("Tipo de corte inválido.")
+    if " ".join(dados["roteiro"].split()) != " ".join(
+            " ".join(c["narracao"] for c in cenas).split()):
+        raise ValueError("As cenas não cobrem exatamente o roteiro; geração interrompida.")
+
+
+def gerar_narracao_cenas(cenas: list, pasta: Path) -> tuple[Path, list]:
+    """Mede cada trecho em PCM para manter cortes e legendas na mesma linha de tempo."""
+    import wave
+    timeline = []
+    inicio = 0.0
+    destino = pasta / "voz.wav"
+    with wave.open(str(destino), "wb") as unido:
+        unido.setnchannels(1)
+        unido.setsampwidth(2)
+        unido.setframerate(24000)
+        for i, cena in enumerate(cenas):
+            mp3 = pasta / f"voz_{i}.mp3"
+            wav = pasta / f"voz_{i}.wav"
+            gerar_voz(cena["narracao"], mp3)
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(mp3),
+                            "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le", str(wav)],
+                           check=True, timeout=FFMPEG_TIMEOUT_SEGUNDOS)
+            with wave.open(str(wav), "rb") as trecho:
+                duracao = trecho.getnframes() / trecho.getframerate()
+                unido.writeframes(trecho.readframes(trecho.getnframes()))
+            timeline.append({**cena, "inicio": inicio, "duracao": duracao})
+            inicio += duracao
+    (pasta / "plano_cenas.json").write_text(
+        json.dumps(timeline, ensure_ascii=False, indent=2), encoding="utf-8")
+    return destino, timeline
 
 
 # ----------------------------------------------------------------
@@ -302,23 +372,16 @@ def baixar_clipe(palavra_chave: str, destino: Path) -> bool:
     videos = _buscar_videos_pixabay(palavra_chave)
 
     if not videos:
-        # Plano B: tenta só a primeira palavra (buscas de 2+ palavras às
-        # vezes não encontram nada no Pixabay, mas a palavra isolada acha)
-        primeira_palavra = palavra_chave.split()[0]
-        if primeira_palavra != palavra_chave:
-            print(f"    Nenhum resultado para '{palavra_chave}', "
-                  f"tentando só '{primeira_palavra}'...")
-            videos = _buscar_videos_pixabay(primeira_palavra)
-
-    if not videos:
-        # Plano C: um termo bem genérico, pra garantir que sempre vem algo
-        print(f"    Ainda sem resultado, usando termo genérico de reserva...")
-        videos = _buscar_videos_pixabay("nature")
-
-    if not videos:
+        # Não substituir uma cena específica por natureza ou outro tema aleatório.
         return False
-
-    video = random.choice(videos)
+    termos = set(re.findall(r"[a-z]+", palavra_chave.lower()))
+    def relevancia(video):
+        tags = set(re.findall(r"[a-z]+", video.get("tags", "").lower()))
+        return len(termos & tags)
+    videos.sort(key=relevancia, reverse=True)
+    video = videos[0]
+    if relevancia(video) == 0:
+        return False
     # o Pixabay não tem filtro nativo de "vertical", então pegamos
     # o arquivo de maior resolução disponível (o FFmpeg recorta pra 9:16 depois)
     arquivos = video.get("videos", {})
@@ -330,6 +393,7 @@ def baixar_clipe(palavra_chave: str, destino: Path) -> bool:
         return False
 
     video_resp = requests.get(url_video, timeout=60)
+    video_resp.raise_for_status()
     destino.write_bytes(video_resp.content)
     return True
 
@@ -343,7 +407,7 @@ def montar_banco_de_clipes(palavras_chave: list, pasta: Path) -> list:
             clipes.append(destino)
             print(f"    OK: clipe_{i}.mp4 baixado")
         else:
-            print(f"    FALHOU: não achou nenhum clipe pra '{palavra}'")
+            raise RuntimeError(f"Sem clipe relevante para a cena {i}: {palavra}")
     return clipes
 
 
@@ -382,8 +446,26 @@ def gerar_imagem_stability(prompt: str, destino_png: Path):
         },
         timeout=60,
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        # Exibe apenas o diagnóstico do serviço, nunca cabeçalhos de autenticação.
+        try:
+            corpo = resp.json()
+        except ValueError:
+            corpo = {}
+        nome = str(corpo.get("name", "")) if isinstance(corpo, dict) else ""
+        erros = corpo.get("errors", []) if isinstance(corpo, dict) else []
+        detalhe = str(erros)[:600]
+        # Protege inclusive uma eventual mensagem do serviço que ecoe a chave.
+        chave = str(getattr(config, "STABILITY_API_KEY", ""))
+        if chave:
+            detalhe = detalhe.replace(chave, "[CHAVE OCULTA]")
+            nome = nome.replace(chave, "[CHAVE OCULTA]")
+        raise RuntimeError(
+            f"Stability HTTP {resp.status_code}: {nome or 'sem código de motivo'}. "
+            f"Detalhes: {detalhe}. Os arquivos concluídos foram preservados. "
+            "Não haverá nova chamada automática para essa imagem.")
     destino_png.write_bytes(resp.content)
+
 
 
 def gerar_clipe_com_ken_burns(
@@ -422,7 +504,7 @@ def gerar_clipe_com_ken_burns(
     )
 
 
-def montar_banco_de_imagens(cenas: list, pasta: Path) -> list:
+def montar_banco_de_imagens(cenas: list, pasta: Path, duracoes: list | None = None) -> list:
     """Equivalente a montar_banco_de_clipes, mas gerando as imagens por IA
     em vez de baixar do Pixabay."""
     clipes = []
@@ -432,14 +514,33 @@ def montar_banco_de_imagens(cenas: list, pasta: Path) -> list:
         resumo = cena[:60] + ("..." if len(cena) > 60 else "")
         print(f"    Gerando imagem IA ({i+1}/{len(cenas)}): '{resumo}'")
         try:
-            gerar_imagem_stability(cena, imagem_path)
+            tempo = duracoes[i] if duracoes else MAX_SEGUNDOS_POR_CLIPE
+            if clipe_path.exists():
+                try:
+                    if abs(obter_duracao_segundos(clipe_path) - tempo) < 0.1:
+                        print(f"    Reutilizando clipe_{i}.mp4 (sem chamada à API)")
+                        clipes.append(clipe_path)
+                        continue
+                except (subprocess.CalledProcessError, ValueError):
+                    pass  # Arquivo incompleto: reconstruir a partir da imagem salva.
+            if imagem_path.exists() and imagem_path.stat().st_size > 0:
+                subprocess.run(["ffprobe", "-v", "error", str(imagem_path)],
+                               check=True, capture_output=True, timeout=30)
+                print(f"    Reutilizando imagem_{i}.png (sem chamada à API)")
+            else:
+                gerar_imagem_stability(cena, imagem_path)
             gerar_clipe_com_ken_burns(
-                imagem_path, clipe_path, pasta, zoom_out=(i % 2 == 1)
+                imagem_path, clipe_path, pasta,
+                duracao=duracoes[i] if duracoes else MAX_SEGUNDOS_POR_CLIPE,
+                zoom_out=(i % 2 == 1)
             )
             clipes.append(clipe_path)
             print(f"    OK: clipe_{i}.mp4 gerado (imagem + Ken Burns)")
         except Exception as e:
-            print(f"    FALHOU ao gerar a cena {i}: {e}")
+            raise RuntimeError(
+                f"Falha na cena {i + 1}/{len(cenas)} (imagem_{i}.png): {e}\n"
+                f'Para retomar: python gerar_video.py --retomar "{pasta.resolve()}"'
+            ) from e
     return clipes
 
 
@@ -474,81 +575,42 @@ def obter_duracao_segundos(caminho_audio: Path) -> float:
 
 def montar_video(
     clipes: list, audio_path: Path, legenda_path: Path, saida_path: Path,
-    musica_path: Path | None = None,
+    musica_path: Path | None = None, segmentos: list | None = None,
 ):
     pasta = saida_path.parent
     duracao = obter_duracao_segundos(audio_path)
 
-    # ------------------------------------------------------------
-    # Concatenação via FILTRO (não via demuxer "-f concat").
-    #
-    # O demuxer "-f concat" lê os arquivos em baixo nível, antes de
-    # decodificar, e é muito sensível a metadados de duração corrompidos
-    # vindos de uma fonte (um clipe do banco de vídeos pode trazer um
-    # cabeçalho de duração errado). Isso já causou o bug do vídeo saindo
-    # com 40+ minutos em vez de ~30 segundos.
-    #
-    # Aqui, cada clipe é aberto como um input separado e já decodificado
-    # (-t 8 limita cada um a no máximo 8s, como segurança extra), depois
-    # o filtro "concat" junta os frames já normalizados. Isso elimina o
-    # problema na raiz, porque nenhum metadado de duração de origem é
-    # usado para decidir onde o vídeo termina.
-    # ------------------------------------------------------------
-    comando = ["ffmpeg", "-y"]
-    for clipe in clipes:
-        comando += ["-t", str(MAX_SEGUNDOS_POR_CLIPE), "-i", clipe.name]
-
-    partes_filtro = []
-    for i in range(len(clipes)):
-        partes_filtro.append(
-            f"[{i}:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-            f"crop=1080:1920,setsar=1,fps=30,setpts=PTS-STARTPTS[v{i}]"
-        )
-
-    # Transição suave (crossfade) entre cada cena, em vez de corte seco —
-    # dá um acabamento bem mais profissional. Cada clipe tem duração fixa
-    # (MAX_SEGUNDOS_POR_CLIPE), então dá pra calcular o "offset" de cada
-    # transição com antecedência.
-    TRANSICAO_SEGUNDOS = 0.5
-    if len(clipes) == 1:
-        filtro_transicoes = ";[v0]null[outv]"
-    else:
-        transicoes = []
-        label_anterior = "v0"
-        duracao_acumulada = MAX_SEGUNDOS_POR_CLIPE
-        for i in range(1, len(clipes)):
-            label_saida = f"x{i}" if i < len(clipes) - 1 else "outv"
-            offset = duracao_acumulada - TRANSICAO_SEGUNDOS
-            transicoes.append(
-                f"[{label_anterior}][v{i}]xfade=transition=fade:"
-                f"duration={TRANSICAO_SEGUNDOS}:offset={offset}[{label_saida}]"
-            )
-            label_anterior = label_saida
-            duracao_acumulada += MAX_SEGUNDOS_POR_CLIPE - TRANSICAO_SEGUNDOS
-        filtro_transicoes = ";" + ";".join(transicoes)
-
-    filtro_concat = ";".join(partes_filtro) + filtro_transicoes
-
-    comando += [
-        "-filter_complex", filtro_concat,
-        "-map", "[outv]",
-        "-c:v", "libx264", "-preset", "veryfast",
-        "-t", str(duracao + 10),  # trava de segurança (nunca passa disso)
-        "concatenado.mp4",
-    ]
-
-    subprocess.run(
-        comando,
-        check=True,
-        cwd=str(pasta),  # roda dentro da pasta pra evitar o "C:" ou "F:" no caminho
-        timeout=FFMPEG_TIMEOUT_SEGUNDOS,
-    )
+    if not clipes:
+        raise ValueError("Nenhuma cena disponível para montagem.")
+    if segmentos is not None and len(segmentos) != len(clipes):
+        raise ValueError("Quantidade de clipes diferente da quantidade de cenas.")
+    duracoes = ([c["duracao"] for c in segmentos] if segmentos is not None
+                else [duracao / len(clipes)] * len(clipes))
+    if abs(sum(duracoes) - duracao) > 0.1:
+        raise ValueError("A duração das cenas não corresponde à narração.")
+    comando = ["ffmpeg", "-y", "-filter_complex_threads", "2"]
+    partes = []
+    for i, (clipe, tempo) in enumerate(zip(clipes, duracoes)):
+        comando += ["-stream_loop", "-1", "-i", str(clipe.resolve())]
+        filtro = (f"[{i}:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+                  "crop=1080:1920,setsar=1,fps=30,format=yuv420p,"
+                  f"trim=duration={tempo:.6f},setpts=PTS-STARTPTS")
+        if segmentos and segmentos[i].get("corte") == "suave" and i < len(clipes)-1:
+            fade = min(0.15, tempo / 4)
+            filtro += f",fade=t=out:st={tempo-fade:.6f}:d={fade:.6f}"
+        partes.append(filtro + f"[v{i}]")
+    entradas = "".join(f"[v{i}]" for i in range(len(clipes)))
+    partes.append(f"{entradas}concat=n={len(clipes)}:v=1:a=0[outv]")
+    comando += ["-filter_complex", ";".join(partes), "-map", "[outv]",
+                "-c:v", "libx264", "-threads", "2", "-preset", "veryfast",
+                "-t", str(duracao), "concatenado.mp4"]
+    subprocess.run(comando, check=True, cwd=str(pasta), timeout=FFMPEG_TIMEOUT_SEGUNDOS)
 
     # Verifica se a legenda existe e tem conteúdo real antes de tentar usá-la.
     legenda_ok = legenda_path.exists() and legenda_path.stat().st_size > 10
     if not legenda_ok:
         print("    AVISO: legenda.ass não foi gerada corretamente (arquivo "
-              "ausente ou vazio). O vídeo vai sair sem legenda desta vez.")
+              "ausente ou vazio). A montagem será interrompida.")
 
     tem_musica = musica_path is not None
     if tem_musica:
@@ -560,8 +622,8 @@ def montar_video(
 
     def _rodar(com_legenda: bool, com_onda: bool):
         comando = [
-            "ffmpeg", "-y",
-            "-stream_loop", "-1", "-i", "concatenado.mp4",  # input 0: vídeo
+            "ffmpeg", "-y", "-filter_complex_threads", "2",
+            "-i", "concatenado.mp4",  # input 0: vídeo
             "-i", audio_path.name,                          # input 1: voz
         ]
         proximo_indice = 2
@@ -579,30 +641,24 @@ def montar_video(
             "crop=1080:1920"
         )
         if com_legenda:
-            # O estilo (bold, branco, contorno preto) e a animação de pop
-            # (cresce ao aparecer) já vêm embutidos no próprio arquivo
-            # .ass gerado em gerar_legenda_por_tempo — não precisa de
-            # force_style aqui.
+            # Fonte, contorno e entrada suave são definidos no arquivo ASS.
             filtro_video += f",subtitles={legenda_path.name}"
 
         if com_onda:
-            # Visualizador de onda sonora: uma caixa escura com uma linha
-            # amarela grossa que pulsa no ritmo da voz, posicionada no
-            # TERÇO SUPERIOR do vídeo (longe da legenda, que fica embaixo).
-            # A caixa preta por trás garante contraste em qualquer fundo de
-            # clipe. Gerado a partir do áudio da narração (input 1), nunca
-            # da música, pra pulsar certinho com o que está sendo dito.
+            # Faixa discreta, envelope comprimido e altura limitada a 36 px.
             filtro_video += (
-                ",drawbox=x=(iw-1000)/2:y=160:w=1000:h=220:"
-                "color=black@0.55:t=fill[base]"
+                ",drawbox=x=60:y=170:w=960:h=80:"
+                "color=black@0.22:t=fill[base]"
             )
             filtro_onda = (
-                "[1:a]showwaves=s=960x180:mode=cline:rate=25:"
-                "colors=0xFFD400,format=rgba,"
-                "colorchannelmixer=aa=0.95[onda]"
+                "[1:a]aformat=channel_layouts=mono,"
+                "acompressor=threshold=0.125:ratio=4:attack=20:release=180:makeup=1,"
+                "volume=0.65,showwaves=s=920x36:mode=line:rate=30:"
+                "colors=0xFFD400:scale=lin:draw=full,format=rgba,"
+                "colorchannelmixer=aa=0.85[onda]"
             )
             filtro_video += (
-                f";{filtro_onda};[base][onda]overlay=(main_w-overlay_w)/2:180[comonda]"
+                f";{filtro_onda};[base][onda]overlay=(main_w-overlay_w)/2:192[comonda]"
             )
             label_atual = "comonda"
         else:
@@ -646,7 +702,7 @@ def montar_video(
             # (que usa transparência) força um formato mais pesado e quase
             # triplica o tamanho do arquivo, estourando o limite do Telegram.
             "-pix_fmt", "yuv420p",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:v", "libx264", "-threads", "2", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
             saida_path.name,
         ]
@@ -654,27 +710,10 @@ def montar_video(
             comando, check=True, cwd=str(pasta), timeout=FFMPEG_TIMEOUT_SEGUNDOS,
         )
 
-    # Tenta na ordem: (legenda + onda) -> (sem legenda + onda) ->
-    # (sem legenda + sem onda). Cada etapa só desliga nessa ordem se a
-    # anterior falhar, pra sempre entregar um vídeo no final.
-    tentativas = []
-    if legenda_ok:
-        tentativas.append((True, True))
-    tentativas.append((False, True))
-    tentativas.append((False, False))
-
-    erro_final = None
-    for com_legenda, com_onda in tentativas:
-        try:
-            _rodar(com_legenda=com_legenda, com_onda=com_onda)
-            return
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            erro_final = e
-            motivo = "demorou demais (timeout)" if isinstance(e, subprocess.TimeoutExpired) else "erro no FFmpeg"
-            print(f"    AVISO: falhou com legenda={com_legenda}, onda={com_onda} "
-                  f"({motivo}). Tentando a próxima configuração...")
-
-    raise erro_final
+    if not legenda_ok:
+        raise RuntimeError("Legenda ausente: vídeo não será enviado sem legenda.")
+    # Uma falha de montagem deve ficar visível, sem publicar uma versão degradada.
+    _rodar(com_legenda=True, com_onda=True)
 
 
 # ----------------------------------------------------------------
@@ -711,33 +750,62 @@ def enviar_para_telegram(video_path: Path, legenda_texto: str):
 # ----------------------------------------------------------------
 # Fluxo principal
 # ----------------------------------------------------------------
+def carregar_execucao(pasta: Path) -> tuple[dict, list, Path]:
+    plano = pasta / "plano_cenas.json"
+    audio = pasta / "voz.wav"
+    if not plano.is_file() or not audio.is_file():
+        raise ValueError("A pasta precisa conter plano_cenas.json e voz.wav para retomar.")
+    segmentos = json.loads(plano.read_text(encoding="utf-8"))
+    if not isinstance(segmentos, list) or not segmentos:
+        raise ValueError("Plano de cenas vazio ou inválido.")
+    fim = 0.0
+    for cena in segmentos:
+        if cena["duracao"] <= 0 or abs(cena["inicio"] - fim) > 0.01:
+            raise ValueError("Linha de tempo inválida; nenhum serviço foi chamado.")
+        fim += cena["duracao"]
+    if abs(obter_duracao_segundos(audio) - fim) > 0.1:
+        raise ValueError("O áudio salvo não corresponde à duração do plano.")
+    roteiro_path = pasta / "roteiro.json"
+    # Compatibilidade com a primeira versão, que salvou apenas o plano.
+    dados = (json.loads(roteiro_path.read_text(encoding="utf-8")) if roteiro_path.exists()
+             else {"tema": "História retomada", "roteiro": " ".join(c["narracao"] for c in segmentos)})
+    return dados, segmentos, audio
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Gerar ou retomar um vídeo.")
+    parser.add_argument("--retomar", type=Path, help="Pasta da execução interrompida em saida.")
+    args = parser.parse_args()
     print(f"[{datetime.now()}] Iniciando geração de vídeo...")
-
-    pasta_trabalho = SAIDA_DIR / datetime.now().strftime("%Y%m%d_%H%M%S")
-    pasta_trabalho.mkdir(parents=True, exist_ok=True)
-
-    print("1/5 Gerando roteiro...")
-    dados = gerar_roteiro()
-    print(f"    Categoria: {escolher_categoria()}")
-    print(f"    Tema: {dados['tema']}")
-
-    print("2/5 Gerando voz e legenda...")
-    audio_path = pasta_trabalho / "voz.mp3"
+    if args.retomar:
+        pasta_trabalho = args.retomar.resolve()
+        dados, segmentos, audio_path = carregar_execucao(pasta_trabalho)
+        print("    Retomando roteiro e narração salvos (sem novas chamadas para essas etapas).")
+    else:
+        pasta_trabalho = SAIDA_DIR / datetime.now().strftime("%Y%m%d_%H%M%S")
+        pasta_trabalho.mkdir(parents=True, exist_ok=True)
+        print("1/5 Gerando roteiro...")
+        dados = gerar_roteiro()
+        (pasta_trabalho / "roteiro.json").write_text(
+            json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"    Categoria: {escolher_categoria()}")
+        print(f"    Tema: {dados['tema']}")
+        print("2/5 Gerando voz e legenda...")
+        audio_path, segmentos = gerar_narracao_cenas(dados["plano_cenas"], pasta_trabalho)
     legenda_path = pasta_trabalho / "legenda.ass"
-    gerar_voz(dados["roteiro"], audio_path)
     duracao_audio = obter_duracao_segundos(audio_path)
-    gerar_legenda_por_tempo(dados["roteiro"], duracao_audio, legenda_path)
+    gerar_legenda_por_tempo(dados["roteiro"], duracao_audio, legenda_path, segmentos=segmentos)
     print(f"    (voz com {duracao_audio:.1f}s, legenda.ass gerada com "
           f"{legenda_path.stat().st_size} bytes)")
 
     usar_ia = getattr(config, "USAR_IMAGENS_IA", False)
     if usar_ia:
         print("3/5 Gerando imagens com IA (Stability AI)...")
-        clipes = montar_banco_de_imagens(dados["cenas"], pasta_trabalho)
+        clipes = montar_banco_de_imagens([c["visual"] for c in segmentos], pasta_trabalho,
+                                         duracoes=[c["duracao"] for c in segmentos])
     else:
         print("3/5 Baixando clipes...")
-        clipes = montar_banco_de_clipes(dados["palavras_chave"], pasta_trabalho)
+        clipes = montar_banco_de_clipes([c["busca"] for c in segmentos], pasta_trabalho)
     if not clipes:
         print("    Nenhum clipe/imagem disponível. Abortando.")
         return
@@ -748,7 +816,7 @@ def main():
     if musica_path is None:
         print("    (nenhuma música encontrada na pasta 'musica/' — "
               "vídeo sai só com a narração)")
-    montar_video(clipes, audio_path, legenda_path, video_final, musica_path)
+    montar_video(clipes, audio_path, legenda_path, video_final, musica_path, segmentos=segmentos)
 
     print("5/5 Enviando para aprovação no Telegram...")
     enviar_para_telegram(video_final, f"Tema: {dados['tema']}\n\n{dados['roteiro']}")
