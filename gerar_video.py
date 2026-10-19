@@ -42,6 +42,10 @@ MUSICA_DIR.mkdir(exist_ok=True)
 
 VOZ = "pt-BR-AntonioNeural"  # alternativa: pt-BR-FranciscaNeural
 FFMPEG_TIMEOUT_SEGUNDOS = 900  # rede de segurança: mata o FFmpeg se passar disso
+MAX_IMAGENS = 6
+DURACAO_MINIMA = 62.0
+DURACAO_MAXIMA = 65.0
+DURACAO_ALVO = 64.0
 MAX_SEGUNDOS_POR_CLIPE = 8  # duração de cada "clipe" (vídeo de banco OU imagem com Ken Burns)
 LOGO_FAIXA_PATH = BASE_DIR / "assets" / "logo_faixa.png"
 LOGO_FAIXA_URL = "https://raw.githubusercontent.com/criadorapatricia-blip/VideoMaker/main/assets/logo_faixa.png"
@@ -127,8 +131,8 @@ então a história PRECISA ter corpo suficiente pra isso, sem ficar enrolada):
 5. Clímax: o momento de maior tensão.
 6. Reviravolta ou revelação final, que resignifica o que foi contado antes.
 
-Isso deve resultar num roteiro de aproximadamente 160 a 190 palavras em
-português (o suficiente pra ficar entre 60 e 75 segundos de narração).
+Isso deve resultar num roteiro de 115 a 140 palavras em
+português (o suficiente pra ficar entre 62 e 65 segundos de narração).
 Um roteiro curto demais, ou que só descreve uma cena sem desenvolver os
 pontos acima, NÃO é aceitável.
 
@@ -139,16 +143,16 @@ com nomes diferentes):
 Responda APENAS em JSON válido, neste formato exato, sem markdown, sem texto antes ou depois:
 {{
   "tema": "nome curto da história (resume o gancho, sem spoiler do final)",
-  "roteiro": "texto narrado de 60 a 75 segundos (160 a 190 palavras), em português do Brasil, em primeira pessoa, seguindo a estrutura de 6 pontos acima",
-  "palavras_chave": ["palavra1", "palavra2", "palavra3", "palavra4", "palavra5", "palavra6", "palavra7", "palavra8"],
-  "cenas": ["descrição 1", "descrição 2", "descrição 3", "descrição 4", "descrição 5", "descrição 6", "descrição 7", "descrição 8"]
+  "roteiro": "texto narrado de 62 a 65 segundos (115 a 140 palavras), em português do Brasil, em primeira pessoa, seguindo a estrutura de 6 pontos acima",
+  "palavras_chave": ["palavra1", "palavra2", "palavra3", "palavra4", "palavra5", "palavra6"],
+  "cenas": ["descrição 1", "descrição 2", "descrição 3", "descrição 4", "descrição 5", "descrição 6"]
 }}
 
 As palavras_chave devem ser termos em INGLÊS, simples, para buscar vídeos de banco de imagens
 (ex: "empty hallway night", "foggy forest", "old house window"). Devem seguir a ordem
 cronológica da história.
 
-As "cenas" devem ser 8 descrições em INGLÊS, uma para cada momento da história em ordem
+As "cenas" devem ser 6 descrições em INGLÊS, uma para cada momento da história em ordem
 cronológica (acompanhando os 6 pontos da estrutura acima), MAIS DETALHADAS que as
 palavras_chave — pensadas para um gerador de imagens por IA (estilo cinematográfico,
 sombrio, com iluminação e atmosfera descritas). Exemplo: "a dim hallway in an old house,
@@ -159,12 +163,12 @@ que dependa de texto legível — geradores de imagem por IA erram muito ao escr
 isso passa impressão de descuido. Prefira ambientes, objetos e silhuetas sem texto."""
 
     prompt += """
-Além das chaves anteriores, inclua "plano_cenas": uma lista de 10 a 16 objetos:
+Além das chaves anteriores, inclua "plano_cenas": uma lista de exatamente 6 objetos:
 {"narracao": "trecho literal do roteiro", "visual": "descrição em inglês",
  "busca": "termos concretos em inglês", "corte": "seco"}.
 A concatenação dos trechos narracao DEVE reproduzir TODO o roteiro, na ordem,
 sem omitir, repetir ou alterar palavras. Cada trecho tem uma ação visual principal,
-8 a 20 palavras e termina numa pausa natural. Use trechos menores no gancho e
+15 a 28 palavras e termina numa pausa natural. Use trechos menores no gancho e
 na escalada/clímax. Visual e busca devem representar exatamente a ação narrada,
 sem objetos ou personagens extras. Para suspense, prefira ambientes cotidianos,
 detalhes de objetos e iluminação. Os visuais devem ser adequados ao público geral,
@@ -173,7 +177,7 @@ cenário para manter continuidade. Não dependa de texto legível nas imagens.
 Use corte="suave" só em passagem de tempo ou ambientação; use "seco" no gancho,
 nas descobertas e na revelação. A imagem de uma cena não deve antecipar a próxima.
 """
-    for tentativa in range(3):
+    for tentativa in range(2):
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=4500,
@@ -186,8 +190,8 @@ nas descobertas e na revelação. A imagem de uma cena não deve antecipar a pr�
             validar_plano_cenas(dados)
             return dados
         except (ValueError, TypeError, KeyError, AttributeError) as erro:
-            if tentativa == 2:
-                raise ValueError("Não foi possível gerar um plano de cenas válido após 3 tentativas.") from erro
+            if tentativa == 1:
+                raise ValueError("Não foi possível gerar um plano de cenas válido após 2 tentativas.") from erro
             print("    Plano de cenas inválido; solicitando um novo roteiro...")
 
 
@@ -316,8 +320,8 @@ def gerar_legenda_por_tempo(
 
 def validar_plano_cenas(dados: dict):
     cenas = dados.get("plano_cenas", [])
-    if not isinstance(cenas, list) or not 10 <= len(cenas) <= 16:
-        raise ValueError("O roteiro precisa de 10 a 16 cenas alinhadas à narração.")
+    if not isinstance(cenas, list) or not 1 <= len(cenas) <= MAX_IMAGENS:
+        raise ValueError("O roteiro precisa de 1 a 6 cenas alinhadas à narração.")
     for cena in cenas:
         if not isinstance(cena, dict):
             raise ValueError("Cena precisa ser um objeto.")
@@ -539,11 +543,12 @@ def gerar_clipe_com_ken_burns(
     começar normal e aproximar) — dá mais variedade visual entre as cenas
     em vez de todas fazerem o mesmo movimento."""
     fps = 30
-    frames = int(duracao * fps)
+    frames = max(1, round(duracao * fps))
+    passo_zoom = 0.15 / max(frames - 1, 1)
     if zoom_out:
-        expressao_zoom = "if(eq(on,0),1.15,max(zoom-0.0007,1.0))"
+        expressao_zoom = f"if(eq(on,0),1.15,max(zoom-{passo_zoom:.10f},1.0))"
     else:
-        expressao_zoom = "min(zoom+0.0007,1.15)"
+        expressao_zoom = f"min(1+on*{passo_zoom:.10f},1.15)"
     comando = [
         "ffmpeg", "-y", "-loop", "1", "-i", imagem_path.name,
         "-vf", (
@@ -565,6 +570,8 @@ def gerar_clipe_com_ken_burns(
 def montar_banco_de_imagens(cenas: list, pasta: Path, duracoes: list | None = None) -> list:
     """Equivalente a montar_banco_de_clipes, mas gerando as imagens por IA
     em vez de baixar do Pixabay."""
+    if len(cenas) > MAX_IMAGENS:
+        raise ValueError("Limite de 6 imagens por vídeo excedido; nenhuma imagem será solicitada.")
     clipes = []
     for i, cena in enumerate(cenas):
         imagem_path = pasta / f"imagem_{i}.png"
@@ -837,6 +844,40 @@ def enviar_para_telegram(video_path: Path, legenda_texto: str):
 # ----------------------------------------------------------------
 # Fluxo principal
 # ----------------------------------------------------------------
+def ajustar_duracao_narracao(audio: Path, segmentos: list, pasta: Path) -> tuple[Path, list]:
+    """Ajusta o ritmo sem cortar a história nem alterar o tom da voz."""
+    duracao = obter_duracao_segundos(audio)
+    if DURACAO_MINIMA <= duracao <= DURACAO_MAXIMA:
+        return audio, segmentos
+    fator = duracao / DURACAO_ALVO
+    # atempo aceita entre 0.5 e 2 por estágio, inclusive para retomadas antigas.
+    fatores = []
+    restante = fator
+    while restante > 2:
+        fatores.append(2.0)
+        restante /= 2
+    while restante < 0.5:
+        fatores.append(0.5)
+        restante /= 0.5
+    fatores.append(restante)
+    destino = pasta / "voz_ajustada.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(audio), "-af",
+                    ",".join(f"atempo={f:.10f}" for f in fatores) +
+                    f",apad,atrim=duration={DURACAO_ALVO}",
+                    "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le", str(destino)],
+                   check=True, timeout=FFMPEG_TIMEOUT_SEGUNDOS)
+    tempo_final = obter_duracao_segundos(destino)
+    if not DURACAO_MINIMA <= tempo_final <= DURACAO_MAXIMA:
+        raise RuntimeError("Não foi possível ajustar a duração; nenhuma imagem foi solicitada.")
+    escala = tempo_final / duracao
+    ajustados = [{**c, "inicio": c["inicio"] * escala, "duracao": c["duracao"] * escala}
+                 for c in segmentos]
+    (pasta / "plano_montagem.json").write_text(
+        json.dumps(ajustados, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"    Narração ajustada de {duracao:.1f}s para {tempo_final:.1f}s, sem cortar o texto.")
+    return destino, ajustados
+
+
 def carregar_execucao(pasta: Path) -> tuple[dict, list, Path]:
     plano = pasta / "plano_cenas.json"
     audio = pasta / "voz.wav"
@@ -879,6 +920,10 @@ def main():
         print(f"    Tema: {dados['tema']}")
         print("2/5 Gerando voz e legenda...")
         audio_path, segmentos = gerar_narracao_cenas(dados["plano_cenas"], pasta_trabalho)
+    if len(segmentos) > MAX_IMAGENS:
+        raise ValueError("Essa execução antiga tem mais de 6 cenas. Para o novo formato econômico, "
+                         "execute python gerar_video.py para criar um vídeo novo.")
+    audio_path, segmentos = ajustar_duracao_narracao(audio_path, segmentos, pasta_trabalho)
     legenda_path = pasta_trabalho / "legenda.ass"
     duracao_audio = obter_duracao_segundos(audio_path)
     gerar_legenda_por_tempo(dados["roteiro"], duracao_audio, legenda_path, segmentos=segmentos)
