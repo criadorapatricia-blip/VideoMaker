@@ -100,99 +100,84 @@ def escolher_categoria() -> str:
     return CATEGORIAS[indice]
 
 
-def gerar_roteiro() -> dict:
+def preparar_roteiro(dados: dict) -> dict:
+    """A narração das cenas é a fonte única do roteiro, sem duplicá-la no pedido."""
+    if not isinstance(dados, dict):
+        raise ValueError("A resposta precisa ser um objeto JSON.")
+    cenas = dados.get("plano_cenas")
+    if not isinstance(cenas, list) or not 1 <= len(cenas) <= MAX_IMAGENS:
+        raise ValueError("A resposta precisa conter plano_cenas com 1 a 6 cenas.")
+    normalizadas = []
+    for i, cena in enumerate(cenas):
+        if not isinstance(cena, dict):
+            raise ValueError(f"Cena {i + 1} não é um objeto.")
+        narracao = cena.get("narracao")
+        visual = cena.get("visual")
+        if not isinstance(narracao, str) or not narracao.strip():
+            raise ValueError(f"Cena {i + 1} sem narração.")
+        if not isinstance(visual, str) or not visual.strip():
+            raise ValueError(f"Cena {i + 1} sem descrição visual.")
+        corte = str(cena.get("corte", "seco")).strip().lower()
+        if corte not in ("seco", "suave"):
+            corte = "seco"
+        busca = cena.get("busca")
+        normalizadas.append({**cena, "narracao": " ".join(narracao.split()),
+                             "visual": visual.strip(), "corte": corte,
+                             "busca": busca.strip() if isinstance(busca, str) and busca.strip() else visual.strip()})
+    roteiro = " ".join(c["narracao"] for c in normalizadas)
+    # Compatibilidade com arquivos antigos: não descarta texto omitido nas cenas.
+    original = dados.get("roteiro")
+    if isinstance(original, str) and " ".join(original.split()) != roteiro:
+        raise ValueError("O roteiro antigo contém diferenças em relação às cenas; revise o JSON salvo.")
+    tema = dados.get("tema")
+    if not isinstance(tema, str) or not tema.strip():
+        raise ValueError("Resposta sem título (tema).")
+    pronto = {**dados, "tema": tema.strip(), "roteiro": roteiro, "plano_cenas": normalizadas}
+    validar_plano_cenas(pronto)
+    return pronto
+
+
+def gerar_roteiro(pasta: Path) -> dict:
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-    temas_usados = carregar_temas_usados()[-30:]  # últimos 30, pra não repetir
-    categoria = escolher_categoria()
+    prompt = f"""Escreva uma história curta de suspense psicológico FICTÍCIA, em primeira
+pessoa, em português brasileiro. Categoria: {escolher_categoria()}.
+Use 115 a 140 palavras de narração NO TOTAL, divididas em exatamente SEIS cenas.
+Comece com um gancho, desenvolva contexto e sinais estranhos, aumente a tensão
+e termine com uma reviravolta. Use personagens e locais inventados, sem violência
+gráfica. Cada cena deve conter uma ação visual principal e terminar em pausa natural.
+Não repita ideias recentes: {carregar_temas_usados()[-30:]}
 
-    prompt = f"""Você escreve histórias curtas de suspense/mistério FICTÍCIAS (estilo
-"creepypasta") para Shorts/TikTok, narradas em primeira pessoa.
-
-Categoria de hoje (a história TEM que se encaixar nesta área): {categoria}
-
-REGRAS IMPORTANTES:
-- A história é 100% INVENTADA. Não use nomes de pessoas reais, casos reais
-  ou lugares reais específicos (pode usar lugares genéricos como "uma
-  cidade pequena no interior", sem apontar uma cidade real).
-- Gancho forte logo nos primeiros 3 segundos (uma pergunta intrigante ou
-  uma afirmação estranha que prende a atenção).
-- Tom: suspense e mistério, pode ter um toque sobrenatural. Evite
-  descrições gráficas de violência ou gore explícito.
-
-ESTRUTURA OBRIGATÓRIA (história com camadas, não um fato só contado de forma
-simples — o TikTok e o Kwai só pagam por visualização em vídeos de 60s+,
-então a história PRECISA ter corpo suficiente pra isso, sem ficar enrolada):
-1. Gancho (primeiros segundos): uma situação ou pergunta estranha que gera
-   curiosidade imediata.
-2. Contexto: quem é o narrador, onde está, o que parecia normal no início.
-3. Primeiro sinal de que algo está errado — um detalhe pequeno e estranho.
-4. Escalada: pelo menos DOIS momentos em que a situação piora ou fica mais
-   confusa/assustadora (não pule direto do início pro final).
-5. Clímax: o momento de maior tensão.
-6. Reviravolta ou revelação final, que resignifica o que foi contado antes.
-
-Isso deve resultar num roteiro de 115 a 140 palavras em
-português (o suficiente pra ficar entre 62 e 65 segundos de narração).
-Um roteiro curto demais, ou que só descreve uma cena sem desenvolver os
-pontos acima, NÃO é aceitável.
-
-Temas já usados recentemente (NÃO repita a mesma ideia de história, mesmo
-com nomes diferentes):
-{temas_usados}
-
-Responda APENAS em JSON válido, neste formato exato, sem markdown, sem texto antes ou depois:
-{{
-  "tema": "nome curto da história (resume o gancho, sem spoiler do final)",
-  "roteiro": "texto narrado de 62 a 65 segundos (115 a 140 palavras), em português do Brasil, em primeira pessoa, seguindo a estrutura de 6 pontos acima",
-  "palavras_chave": ["palavra1", "palavra2", "palavra3", "palavra4", "palavra5", "palavra6"],
-  "cenas": ["descrição 1", "descrição 2", "descrição 3", "descrição 4", "descrição 5", "descrição 6"]
-}}
-
-As palavras_chave devem ser termos em INGLÊS, simples, para buscar vídeos de banco de imagens
-(ex: "empty hallway night", "foggy forest", "old house window"). Devem seguir a ordem
-cronológica da história.
-
-As "cenas" devem ser 6 descrições em INGLÊS, uma para cada momento da história em ordem
-cronológica (acompanhando os 6 pontos da estrutura acima), MAIS DETALHADAS que as
-palavras_chave — pensadas para um gerador de imagens por IA (estilo cinematográfico,
-sombrio, com iluminação e atmosfera descritas). Exemplo: "a dim hallway in an old house,
-moonlight through a cracked window, dust in the air, cinematic horror atmosphere,
-photorealistic".
-IMPORTANTE: evite cenas centradas em placas, letreiros, painéis, jornais ou qualquer coisa
-que dependa de texto legível — geradores de imagem por IA erram muito ao escrever texto, e
-isso passa impressão de descuido. Prefira ambientes, objetos e silhuetas sem texto."""
-
-    prompt += """
-Além das chaves anteriores, inclua "plano_cenas": uma lista de exatamente 6 objetos:
-{"narracao": "trecho literal do roteiro", "visual": "descrição em inglês",
- "busca": "termos concretos em inglês", "corte": "seco"}.
-A concatenação dos trechos narracao DEVE reproduzir TODO o roteiro, na ordem,
-sem omitir, repetir ou alterar palavras. Cada trecho tem uma ação visual principal,
-15 a 28 palavras e termina numa pausa natural. Use trechos menores no gancho e
-na escalada/clímax. Visual e busca devem representar exatamente a ação narrada,
-sem objetos ou personagens extras. Para suspense, prefira ambientes cotidianos,
-detalhes de objetos e iluminação. Os visuais devem ser adequados ao público geral,
-sem violência, ferimentos ou figuras ameaçadoras. Repita as características do protagonista e
-cenário para manter continuidade. Não dependa de texto legível nas imagens.
-Use corte="suave" só em passagem de tempo ou ambientação; use "seco" no gancho,
-nas descobertas e na revelação. A imagem de uma cena não deve antecipar a próxima.
-"""
-    for tentativa in range(2):
-        msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=4500,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        texto = msg.content[0].text.strip()
-        texto = texto.replace("```json", "").replace("```", "").strip()
-        try:
-            dados = json.loads(texto)
-            validar_plano_cenas(dados)
-            return dados
-        except (ValueError, TypeError, KeyError, AttributeError) as erro:
-            if tentativa == 1:
-                raise ValueError("Não foi possível gerar um plano de cenas válido após 2 tentativas.") from erro
-            print("    Plano de cenas inválido; solicitando um novo roteiro...")
+Responda APENAS com um objeto JSON contendo tema e plano_cenas.
+Exemplo de estrutura (repita o objeto de cena até completar seis cenas):
+{{"tema": "Título", "plano_cenas": [
+  {{"narracao": "Trecho narrado em português.",
+    "visual": "Description in English of the exact location and action being narrated",
+    "busca": "concrete English search terms", "corte": "seco"}}
+]}}
+Os seis trechos narracao, juntos, formam a história inteira. NÃO inclua outra chave
+roteiro nem listas paralelas de cenas ou palavras-chave: escreva o texto uma única vez.
+Descrições visuais: ambientes e objetos cotidianos, adequados ao público geral,
+sem ferimentos, violência ou figuras ameaçadoras. Mantenha aparência do personagem
+e cenário consistentes. Não inclua placas ou texto legível nas imagens.
+Use corte seco no gancho e nas revelações; suave em passagens de tempo.
+A imagem deve acompanhar a ação narrada sem antecipar a próxima cena."""
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001", max_tokens=3500,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    texto = "\n".join(bloco.text for bloco in msg.content if getattr(bloco, "type", "text") == "text").strip()
+    resposta_path = pasta / "roteiro_resposta.txt"
+    resposta_path.write_text(texto, encoding="utf-8")
+    try:
+        if getattr(msg, "stop_reason", None) == "max_tokens":
+            raise ValueError("A resposta da IA foi interrompida pelo limite de saída.")
+        texto = re.sub(r"^```(?:json)?\s*|\s*```$", "", texto).strip()
+        dados = json.loads(texto)
+        return preparar_roteiro(dados)
+    except (ValueError, TypeError, KeyError, AttributeError) as erro:
+        raise ValueError(
+            f"Roteiro não aceito: {erro}\nResposta preservada em: {resposta_path.resolve()}\n"
+            "Nenhum segundo roteiro foi solicitado e nenhuma imagem foi gerada.") from erro
 
 
 # ----------------------------------------------------------------
@@ -903,7 +888,10 @@ def carregar_execucao(pasta: Path) -> tuple[dict, list, Path]:
 def main():
     parser = argparse.ArgumentParser(description="Gerar ou retomar um vídeo.")
     parser.add_argument("--retomar", type=Path, help="Pasta da execução interrompida em saida.")
+    parser.add_argument("--roteiro", type=Path, help="Usar resposta JSON salva sem chamar a Anthropic.")
     args = parser.parse_args()
+    if args.retomar and args.roteiro:
+        parser.error("Use --retomar ou --roteiro, não ambos.")
     print(f"[{datetime.now()}] Iniciando geração de vídeo...")
     if args.retomar:
         pasta_trabalho = args.retomar.resolve()
@@ -913,7 +901,13 @@ def main():
         pasta_trabalho = SAIDA_DIR / datetime.now().strftime("%Y%m%d_%H%M%S")
         pasta_trabalho.mkdir(parents=True, exist_ok=True)
         print("1/5 Gerando roteiro...")
-        dados = gerar_roteiro()
+        if args.roteiro:
+            texto = args.roteiro.read_text(encoding="utf-8-sig").strip()
+            texto = re.sub(r"^```(?:json)?\s*|\s*```$", "", texto).strip()
+            dados = preparar_roteiro(json.loads(texto))
+            print("    Usando roteiro salvo (sem chamada à Anthropic).")
+        else:
+            dados = gerar_roteiro(pasta_trabalho)
         (pasta_trabalho / "roteiro.json").write_text(
             json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"    Categoria: {escolher_categoria()}")
