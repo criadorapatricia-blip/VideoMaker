@@ -15,6 +15,7 @@ Como usar:
 
 import os
 import argparse
+import hashlib
 import json
 import random
 import re
@@ -42,7 +43,10 @@ MUSICA_DIR.mkdir(exist_ok=True)
 VOZ = "pt-BR-AntonioNeural"  # alternativa: pt-BR-FranciscaNeural
 FFMPEG_TIMEOUT_SEGUNDOS = 900  # rede de segurança: mata o FFmpeg se passar disso
 MAX_SEGUNDOS_POR_CLIPE = 8  # duração de cada "clipe" (vídeo de banco OU imagem com Ken Burns)
-LOGO_FAIXA_PATH = BASE_DIR / "assets" / "logo_faixa.png"  # faixa de marca (opcional)
+LOGO_FAIXA_PATH = BASE_DIR / "assets" / "logo_faixa.png"
+LOGO_FAIXA_URL = "https://raw.githubusercontent.com/criadorapatricia-blip/VideoMaker/main/assets/logo_faixa.png"
+LOGO_FAIXA_SHA256 = "0c9624ce35c688530f75e4036db676b76113dbaf5bc11782c812810bbbb35207"
+
 
 
 # ----------------------------------------------------------------
@@ -627,6 +631,39 @@ def obter_duracao_segundos(caminho_audio: Path) -> float:
     return float(resultado.stdout.strip())
 
 
+def preparar_logo_faixa():
+    """Baixa a identidade visual uma única vez, sem APIs pagas ou credenciais."""
+    if LOGO_FAIXA_PATH.exists():
+        return
+    print("    Baixando faixa do canal do GitHub (sem API paga)...")
+    resposta = requests.get(LOGO_FAIXA_URL, timeout=30)
+    resposta.raise_for_status()
+    if hashlib.sha256(resposta.content).hexdigest() != LOGO_FAIXA_SHA256:
+        raise RuntimeError("A faixa baixada não passou na verificação de integridade.")
+    LOGO_FAIXA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporario = LOGO_FAIXA_PATH.with_suffix(".tmp")
+    temporario.write_bytes(resposta.content)
+    temporario.replace(LOGO_FAIXA_PATH)
+
+
+def filtro_mixagem_musica(duracao: float, indice_musica: int) -> str:
+    # Normaliza as fontes para reduzir diferenças entre músicas. O sidechain
+    # abaixa a trilha durante a voz e a libera gradualmente nas pausas.
+    ganho = float(getattr(config, "MUSICA_VOLUME", 0.65))
+    if not 0 <= ganho <= 2:
+        raise ValueError("MUSICA_VOLUME deve estar entre 0 e 2.")
+    return (
+        "[1:a]loudnorm=I=-16:TP=-2:LRA=7,aresample=48000,"
+        "asplit=2[voz][controle];"
+        f"[{indice_musica}:a]atrim=duration={duracao},asetpts=PTS-STARTPTS,"
+        f"loudnorm=I=-20:TP=-2:LRA=7,aresample=48000,volume={ganho}[trilha];"
+        "[trilha][controle]sidechaincompress=threshold=0.08:ratio=3:"
+        "attack=30:release=450:makeup=1:link=average[trilha_baixa];"
+        "[voz][trilha_baixa]amix=inputs=2:duration=first:normalize=0:"
+        "dropout_transition=0,alimiter=limit=0.95:level=0:latency=1[aout]"
+    )
+
+
 def montar_video(
     clipes: list, audio_path: Path, legenda_path: Path, saida_path: Path,
     musica_path: Path | None = None, segmentos: list | None = None,
@@ -670,6 +707,7 @@ def montar_video(
     if tem_musica:
         print(f"    Trilha sonora: {musica_path.name}")
 
+    preparar_logo_faixa()
     tem_logo = LOGO_FAIXA_PATH.exists()
     if not tem_logo:
         print(f"    (sem faixa de logo — arquivo não encontrado em {LOGO_FAIXA_PATH})")
@@ -699,20 +737,20 @@ def montar_video(
             filtro_video += f",subtitles={legenda_path.name}"
 
         if com_onda:
-            # Faixa discreta, envelope comprimido e altura limitada a 36 px.
+            # Onda amarela encorpada, com o fundo escuro ainda discreto.
             filtro_video += (
-                ",drawbox=x=60:y=170:w=960:h=80:"
+                ",drawbox=x=40:y=160:w=1000:h=220:"
                 "color=black@0.22:t=fill[base]"
             )
             filtro_onda = (
                 "[1:a]aformat=channel_layouts=mono,"
                 "acompressor=threshold=0.125:ratio=4:attack=20:release=180:makeup=1,"
-                "volume=0.65,showwaves=s=920x36:mode=line:rate=30:"
-                "colors=0xFFD400:scale=lin:draw=full,format=rgba,"
-                "colorchannelmixer=aa=0.85[onda]"
+                "volume=1.0,showwaves=s=960x180:mode=cline:rate=30:"
+                "colors=0xFFD400:scale=sqrt:draw=full,format=rgba,"
+                "colorchannelmixer=aa=0.95[onda]"
             )
             filtro_video += (
-                f";{filtro_onda};[base][onda]overlay=(main_w-overlay_w)/2:192[comonda]"
+                f";{filtro_onda};[base][onda]overlay=(main_w-overlay_w)/2:180[comonda]"
             )
             label_atual = "comonda"
         else:
@@ -724,19 +762,14 @@ def montar_video(
             # legenda aparece (MarginV=300 no .ass garante essa distância),
             # então nunca sobrepõe o texto.
             filtro_video += (
-                f";[{label_atual}][{indice_logo}:v]overlay=0:main_h-overlay_h[vout]"
+                f";[{indice_logo}:v]scale=1080:-2,crop=1080:180,setsar=1[marca];"
+                f"[{label_atual}][marca]overlay=0:main_h-overlay_h:eof_action=repeat[vout]"
             )
         else:
             filtro_video += f";[{label_atual}]null[vout]"
 
         if tem_musica:
-            # Voz no volume normal, música bem mais baixa por baixo (0.12),
-            # cortada na mesma duração da narração.
-            filtro_audio = (
-                f"[1:a]volume=1.0[voz];"
-                f"[2:a]volume=0.12,atrim=0:{duracao}[musica];"
-                f"[voz][musica]amix=inputs=2:duration=first:dropout_transition=0[aout]"
-            )
+            filtro_audio = filtro_mixagem_musica(duracao, indice_musica)
             filtro_completo = f"{filtro_video};{filtro_audio}"
             mapeamento = ["-map", "[vout]", "-map", "[aout]"]
         else:
