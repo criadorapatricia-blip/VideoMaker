@@ -1,0 +1,68 @@
+[
+  {
+    "id": "procrastinacao",
+    "tema": "Adiar tarefas e encontrar um primeiro passo",
+    "base_conceitual": "Procrastinação envolve adiar uma ação pretendida apesar de esperar consequências desfavoráveis. Dificuldade da tarefa, recompensas distantes e autorregulação podem participar; não é possível explicar o comportamento de cada pessoa só com esse conceito. Sugestão: definir um primeiro passo pequeno e concreto, sem prometer solução universal.",
+    "fontes": [
+      {
+        "referencia": "Steel, P. (2007). The nature of procrastination: A meta-analytic and theoretical review of quintessential self-regulatory failure. Psychological Bulletin, 133(1), 65–94.",
+        "url": "https://doi.org/10.1037/0033-2909.133.1.65"
+      }
+    ]
+  },
+  {
+    "id": "ruminacao",
+    "tema": "Ficar repassando uma conversa na cabeça",
+    "base_conceitual": "Ruminação é um padrão de pensamento repetitivo sobre experiências e sentimentos negativos; pensar repetidamente nem sempre ajuda a resolver o problema. Recordar uma conversa não basta para identificar um transtorno. Sugestão cotidiana: distinguir o que pode ser feito agora do que está apenas sendo repetido, sem apresentar isso como tratamento.",
+    "fontes": [
+      {
+        "referencia": "Nolen-Hoeksema, S., Wisco, B. E., & Lyubomirsky, S. (2008). Rethinking Rumination. Perspectives on Psychological Science, 3(5), 400–424.",
+        "url": "https://doi.org/10.1111/j.1745-6924.2008.00088.x"
+      }
+    ]
+  },
+  {
+    "id": "comparacao",
+    "tema": "Comparar sua vida com a dos outros",
+    "base_conceitual": "A comparação social pode servir para avaliar opiniões e capacidades quando faltam critérios objetivos. Contexto e escolha de com quem comparar importam; comparação não é sempre prejudicial nem prova baixa autoestima. Sugestão: lembrar que se está vendo apenas parte da vida de alguém e escolher uma referência pessoal concreta, sem afirmar que o estudo original investigou redes sociais.",
+    "fontes": [
+      {
+        "referencia": "Festinger, L. (1954). A theory of social comparison processes. Human Relations, 7(2), 117–140.",
+        "url": "https://doi.org/10.1177/001872675400700202"
+      }
+    ]
+  },
+  {
+    "id": "planos",
+    "tema": "Transformar uma intenção em um plano concreto",
+    "base_conceitual": "Planos de implementação relacionam uma situação específica a uma ação: quando ou se a situação ocorrer, realizarei determinada ação. Podem ajudar a passar da intenção à ação, sem funcionar igualmente para todos ou garantir hábitos. Sugestão: formular um plano simples de quando e onde iniciar uma tarefa.",
+    "fontes": [
+      {
+        "referencia": "Gollwitzer, P. M. (1999). Implementation intentions: Strong effects of simple plans. American Psychologist, 54(7), 493–503.",
+        "url": "https://doi.org/10.1037/0003-066X.54.7.493"
+      }
+    ]
+  },
+  {
+    "id": "emocoes",
+    "tema": "Perceber uma emoção antes de reagir",
+    "base_conceitual": "Regulação emocional envolve processos que influenciam quais emoções temos, quando ocorrem e como são experimentadas ou expressas. A forma de interpretar uma situação pode influenciar a resposta emocional, sem eliminar emoções por vontade própria. Sugestão: fazer uma pausa quando possível e considerar outra interpretação antes de responder, sem recomendar silenciar ou negar sentimentos.",
+    "fontes": [
+      {
+        "referencia": "Gross, J. J. (1998). The emerging field of emotion regulation: An integrative review. Review of General Psychology, 2(3), 271–299.",
+        "url": "https://doi.org/10.1037/1089-2680.2.3.271"
+      }
+    ]
+  },
+  {
+    "id": "descanso",
+    "tema": "Desligar-se das tarefas no tempo de descanso",
+    "base_conceitual": "Experiências de recuperação após o trabalho incluem distanciamento psicológico, relaxamento, atividades que oferecem aprendizado e algum controle sobre o tempo livre. Não existe uma forma única de descansar. Sugestão: escolher um pequeno período viável para uma atividade diferente do trabalho, sem tratar dificuldade para descansar como diagnóstico ou falha moral.",
+    "fontes": [
+      {
+        "referencia": "Sonnentag, S., & Fritz, C. (2007). The Recovery Experience Questionnaire: Development and validation of a measure for assessing recuperation and unwinding from work. Journal of Occupational Health Psychology, 12(3), 204–221.",
+        "url": "https://doi.org/10.1037/1076-8998.12.3.204"
+      }
+    ]
+  }
+]
