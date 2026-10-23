@@ -1,0 +1,9 @@
+config.py
+.env
+__pycache__/
+*.pyc
+saida/
+logs/
+temas_usados.json
+musica/*
+!musica/.gitkeep
