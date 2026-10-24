@@ -116,3 +116,11 @@ Valores de tom sem sinal, como `0Hz` e `20Hz`, são normalizados para `+0Hz` e
 Amostras anteriores não são sobrescritas por áudio parcial de uma tentativa falha.
 Se a falha persistir, teste a voz com `--teste-voz` e confira o nome exato retornado
 por `python -m edge_tts --list-voices`. Não é necessário mudar de voz automaticamente.
+
+## Identidade: Entre Preces e Reflexões
+
+`assets/logo_perfil.png` é a arte quadrada para os perfis.
+`assets/logo_faixa.png` é a versão horizontal que o gerador coloca automaticamente
+abaixo das legendas. Para instalar a faixa numa pasta já existente, basta salvar
+o arquivo nesse caminho; não altere o config.py ou as músicas.
+O pacote ZIP inclui as duas imagens. Elas não usam créditos das suas APIs.
