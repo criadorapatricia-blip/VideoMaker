@@ -77,9 +77,59 @@ class EspiritaTest(unittest.TestCase):
         config = importlib.util.module_from_spec(spec_config)
         spec_config.loader.exec_module(config)
         self.assertEqual(config.VOZ, 'pt-BR-AntonioNeural')
-        self.assertEqual(config.VOZ_RATE, '-8%')
+        self.assertEqual(config.VOZ_RATE, '-20%')
         self.assertTrue(config.USAR_IMAGENS_IA)
         self.assertFalse(config.USAR_ELEVENLABS)
+
+    def test_fala_longa_nao_e_acelerada(self):
+        with patch.object(g, 'obter_duracao_segundos', return_value=75), \
+             patch.object(g.subprocess, 'run') as ffmpeg:
+            with self.assertRaisesRegex(ValueError, 'Não será acelerada'):
+                g.ajustar_duracao_narracao(Path('voz.wav'), [], Path('/tmp'))
+            ffmpeg.assert_not_called()
+
+    def test_pausas_preservam_amostras_originais(self):
+        import wave
+        taxa = 24000
+        primeiro = b'\x01\x00' * (15 * taxa)
+        segundo = b'\x02\x00' * (15 * taxa)
+        cenas = [{'inicio': 0, 'duracao': 15}, {'inicio': 15, 'duracao': 15}]
+        with tempfile.TemporaryDirectory() as work:
+            pasta = Path(work)
+            original = pasta / 'voz.wav'
+            with wave.open(str(original), 'wb') as f:
+                f.setnchannels(1)
+                f.setsampwidth(2)
+                f.setframerate(taxa)
+                f.writeframes(primeiro + segundo)
+            with patch.object(g, 'obter_duracao_segundos', return_value=30):
+                destino, timeline = g.ajustar_duracao_narracao(original, cenas, pasta)
+            with wave.open(str(destino), 'rb') as f:
+                self.assertEqual(f.getnframes() / taxa, 64)
+                resultado = f.readframes(f.getnframes())
+            self.assertEqual(resultado[:len(primeiro)], primeiro)
+            inicio_segundo = round(timeline[1]['inicio'] * taxa) * 2
+            self.assertEqual(resultado[inicio_segundo:inicio_segundo+len(segundo)], segundo)
+            self.assertEqual(timeline[0]['duracao_fala'], 15)
+            self.assertEqual(sum(c['duracao'] for c in timeline), 64)
+
+    def test_legenda_some_antes_da_pausa(self):
+        with tempfile.TemporaryDirectory() as work:
+            path = Path(work) / 'legenda.ass'
+            g.gerar_legenda_por_tempo('Uma reflexão.', 10, path, segmentos=[
+                {'narracao': 'Uma reflexão.', 'inicio': 0, 'duracao': 10, 'duracao_fala': 6}])
+            self.assertIn('0:00:00.00,0:00:06.00', path.read_text())
+
+    def test_edge_recebe_voz_mais_lenta_e_grave(self):
+        import asyncio
+        class AudioSimulado:
+            async def stream(self):
+                yield {'type': 'audio', 'data': b'audio simulado'}
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(g.edge_tts, 'Communicate', return_value=AudioSimulado()) as tts:
+            asyncio.run(g._gerar_voz_edge_tts_async('Uma reflexão.', Path(work) / 'teste.mp3'))
+            self.assertEqual(tts.call_args.kwargs['rate'], '-20%')
+            self.assertEqual(tts.call_args.kwargs['pitch'], '-12Hz')
 
 
 if __name__ == '__main__':

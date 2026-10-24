@@ -161,8 +161,10 @@ def gerar_roteiro(pasta: Path) -> dict:
     prompt = f"""Crie uma reflexão devocional AUTORAL em português brasileiro, inspirada
 nos princípios do Espiritismo de Allan Kardec. Tema: {escolher_categoria()}.
 Contexto real do computador: {contexto['abertura']}
-Use 105 a 125 palavras no total, em EXATAMENTE SEIS cenas, terminando numa prece
-breve a Deus. Tom acolhedor, sereno, fraterno e esperançoso, sem suspense.
+Use 65 a 80 palavras no total, em EXATAMENTE SEIS cenas, terminando numa prece
+breve a Deus. Frases curtas, com pontuação natural para pausas. Não acrescente
+mais texto para preencher tempo: o programa reserva pausas para reflexão.
+Tom acolhedor, sereno, fraterno e esperançoso, sem suspense.
 Não escreva a data nem o dia da semana na narração: o programa acrescentará a
 abertura correta. Não invente fatos da vida do espectador nem previsões.
 Temas recentes a evitar: {carregar_temas_usados()[-30:]}
@@ -213,8 +215,8 @@ async def _gerar_voz_edge_tts_async(texto: str, audio_path: Path):
     voz = getattr(config, "VOZ", VOZ)
     # rate: velocidade da fala (ex: "-10%" fala mais devagar, "+15%" mais rápido)
     # pitch: tom da voz (ex: "-5Hz" fica mais grave, "+5Hz" mais aguda)
-    rate = getattr(config, "VOZ_RATE", "-8%")
-    pitch = getattr(config, "VOZ_PITCH", "-2Hz")
+    rate = getattr(config, "VOZ_RATE", "-20%")
+    pitch = getattr(config, "VOZ_PITCH", "-12Hz")
     communicate = edge_tts.Communicate(texto, voz, rate=rate, pitch=pitch)
     with open(audio_path, "wb") as f:
         async for chunk in communicate.stream():
@@ -318,7 +320,7 @@ def gerar_legenda_por_tempo(
         total = sum(pesos)
         acumulado = cena["inicio"]
         for bloco, peso in zip(blocos, pesos):
-            fim = acumulado + cena["duracao"] * peso / total
+            fim = acumulado + cena.get("duracao_fala", cena["duracao"]) * peso / total
             seguro = bloco.replace("\\", " ").replace("{", "").replace("}", "")
             tags = r"{\fad(60,60)}"
             linhas.append(
@@ -846,36 +848,48 @@ def enviar_para_telegram(video_path: Path, legenda_texto: str):
 # Fluxo principal
 # ----------------------------------------------------------------
 def ajustar_duracao_narracao(audio: Path, segmentos: list, pasta: Path) -> tuple[Path, list]:
-    """Ajusta o ritmo sem cortar a história nem alterar o tom da voz."""
+    """Mantém a fala intacta: completa a duração com pausas, nunca com aceleração."""
+    import wave
     duracao = obter_duracao_segundos(audio)
     if DURACAO_MINIMA <= duracao <= DURACAO_MAXIMA:
         return audio, segmentos
-    fator = duracao / DURACAO_ALVO
-    # atempo aceita entre 0.5 e 2 por estágio, inclusive para retomadas antigas.
-    fatores = []
-    restante = fator
-    while restante > 2:
-        fatores.append(2.0)
-        restante /= 2
-    while restante < 0.5:
-        fatores.append(0.5)
-        restante /= 0.5
-    fatores.append(restante)
+    if duracao > DURACAO_MAXIMA:
+        raise ValueError(
+            f"A narração ficou com {duracao:.1f}s. Não será acelerada. "
+            "Nenhuma imagem foi solicitada nesta etapa. Encurte os trechos do roteiro.json "
+            "salvo e use --roteiro para narrar novamente, sem outra chamada à Anthropic.")
+    if not segmentos or abs(sum(c["duracao"] for c in segmentos) - duracao) > 0.1:
+        raise ValueError("A linha do tempo não corresponde ao áudio salvo.")
     destino = pasta / "voz_ajustada.wav"
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(audio), "-af",
-                    ",".join(f"atempo={f:.10f}" for f in fatores) +
-                    f",apad,atrim=duration={DURACAO_ALVO}",
-                    "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le", str(destino)],
-                   check=True, timeout=FFMPEG_TIMEOUT_SEGUNDOS)
-    tempo_final = obter_duracao_segundos(destino)
-    if not DURACAO_MINIMA <= tempo_final <= DURACAO_MAXIMA:
-        raise RuntimeError("Não foi possível ajustar a duração; nenhuma imagem foi solicitada.")
-    escala = tempo_final / duracao
-    ajustados = [{**c, "inicio": c["inicio"] * escala, "duracao": c["duracao"] * escala}
-                 for c in segmentos]
+    ajustados = []
+    with wave.open(str(audio), "rb") as origem:
+        parametros = origem.getparams()
+        taxa = origem.getframerate()
+        tamanho_frame = origem.getsampwidth() * origem.getnchannels()
+        if origem.getsampwidth() != 2:
+            raise ValueError("O áudio precisa ser PCM de 16 bits para adicionar pausas.")
+        total_frames = origem.getnframes()
+        frames_pausa = round(DURACAO_ALVO * taxa) - total_frames
+        conteudo = origem.readframes(total_frames)
+        posicao = 0
+        fim_anterior = 0
+        with wave.open(str(destino), "wb") as saida:
+            saida.setparams(parametros)
+            for i, cena in enumerate(segmentos):
+                fim = (round((cena["inicio"] + cena["duracao"]) * taxa)
+                       if i < len(segmentos) - 1 else total_frames)
+                fala_frames = fim - fim_anterior
+                pausa = round(frames_pausa * (i + 1) / len(segmentos)) - round(frames_pausa * i / len(segmentos))
+                saida.writeframes(conteudo[fim_anterior*tamanho_frame:fim*tamanho_frame])
+                saida.writeframes(b"\x00" * pausa * tamanho_frame)
+                ajustados.append({**cena, "inicio": posicao / taxa,
+                                  "duracao": (fala_frames + pausa) / taxa,
+                                  "duracao_fala": cena.get("duracao_fala", fala_frames / taxa)})
+                posicao += fala_frames + pausa
+                fim_anterior = fim
     (pasta / "plano_montagem.json").write_text(
         json.dumps(ajustados, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"    Narração ajustada de {duracao:.1f}s para {tempo_final:.1f}s, sem cortar o texto.")
+    print(f"    Fala preservada em {duracao:.1f}s; pausas de reflexão completam {DURACAO_ALVO:.0f}s.")
     return destino, ajustados
 
 
@@ -905,7 +919,18 @@ def main():
     parser = argparse.ArgumentParser(description="Gerar ou retomar um vídeo.")
     parser.add_argument("--retomar", type=Path, help="Pasta da execução interrompida em saida.")
     parser.add_argument("--roteiro", type=Path, help="Usar resposta JSON salva sem chamar a Anthropic.")
+    parser.add_argument("--teste-voz", action="store_true", help="Amostra Edge TTS sem Anthropic ou Stability.")
     args = parser.parse_args()
+    if args.teste_voz:
+        if args.retomar or args.roteiro:
+            parser.error("Use --teste-voz sozinho.")
+        amostra = BASE_DIR / "teste_voz.mp3"
+        texto = ("Que este novo dia seja uma oportunidade de aprender. "
+                 "Respire com tranquilidade. Que nossas escolhas expressem bondade, "
+                 "paciência e respeito por quem caminha ao nosso lado.")
+        asyncio.run(_gerar_voz_edge_tts_async(texto, amostra))
+        print(f"Amostra salva em {amostra.resolve()}. Sem Anthropic ou Stability.")
+        return
     if args.retomar and args.roteiro:
         parser.error("Use --retomar ou --roteiro, não ambos.")
     print(f"[{datetime.now()}] Iniciando geração de vídeo...")

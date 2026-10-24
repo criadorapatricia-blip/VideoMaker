@@ -7,3 +7,4 @@ logs/
 temas_usados.json
 musica/*
 !musica/.gitkeep
+teste_voz.mp3

@@ -9,10 +9,10 @@ STABILITY_API_KEY = os.environ.get("STABILITY_API_KEY", "sua_chave_aqui")
 USAR_IMAGENS_IA = True
 PIXABAY_API_KEY = ""  # nao e necessario com Stability
 
-# Masculina, serena, sem o tom grave de suspense.
+# Masculina, mais grave e bem lenta para a reflexão devocional.
 VOZ = "pt-BR-AntonioNeural"
-VOZ_RATE = "-8%"
-VOZ_PITCH = "-2Hz"
+VOZ_RATE = "-20%"
+VOZ_PITCH = "-12Hz"
 USAR_ELEVENLABS = False
 MUSICA_VOLUME = 0.55
 

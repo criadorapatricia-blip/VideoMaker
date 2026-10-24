@@ -22,7 +22,7 @@ músicas ou vídeos gerados. Não há agendamento novo; o do suspense continua i
 
 ## Padrão inicial
 
-- Voz masculina `pt-BR-AntonioNeural`, velocidade `-8%` e tom `-2Hz`.
+- Voz masculina `pt-BR-AntonioNeural`, velocidade `-20%` e tom `-12Hz`.
   É a mesma voz-base disponível no Edge TTS, com ajuste de tom e velocidade
   próprio; a naturalidade precisa ser avaliada ouvindo seu primeiro teste.
 - Até seis imagens Stability, vídeo de 62–65 segundos, legenda e movimento suave.
@@ -56,3 +56,33 @@ uma única tentativa de plano alternativo de ambiente; imagens aceitas podem ser
 Testes locais foram feitos com respostas e mídia sintéticas, sem chamadas pagas.
 Geração completa nas APIs, voz real e avaliação doutrinária ficam para seu teste
 no Windows. Mantenha revisão e postagem manuais nesta fase.
+
+## Revisão da voz: fala lenta e texto curto
+
+O roteiro agora pede 65 a 80 palavras antes da abertura com dia e data.
+A duração não é mais ajustada acelerando a voz: se faltar tempo, o programa
+acrescenta pausas entre as cenas e após a prece. As legendas desaparecem nas
+pausas. Se a fala passar de 65 segundos, a execução para antes das imagens,
+sem encurtar ou acelerar o áudio; revise o texto salvo e use `--roteiro`.
+
+Para atualizar uma instalação existente, mantenha seu config.py e suas músicas.
+Substitua gerar_video.py e altere SOMENTE estas linhas no config.py:
+
+```python
+VOZ_RATE = "-20%"
+VOZ_PITCH = "-12Hz"
+```
+
+Os valores do seu config.py têm prioridade sobre os padrões do programa.
+Não substitua config.py pelo modelo, pois isso apagaria as suas configurações.
+
+Antes de gerar outro vídeo, pode ouvir uma amostra do Edge TTS:
+
+```bat
+python gerar_video.py --teste-voz
+```
+
+Cria `teste_voz.mp3` nesta pasta, sem Anthropic, Stability ou ElevenLabs.
+Requer internet para o Edge TTS. A amostra permite avaliar o timbre no seu PC;
+testes locais com áudio sintético não avaliam a naturalidade da voz real.
+Use uma geração nova para avaliar a nova voz: `--retomar` reutiliza o áudio salvo.
