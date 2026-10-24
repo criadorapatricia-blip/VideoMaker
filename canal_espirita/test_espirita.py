@@ -172,6 +172,52 @@ class EspiritaTest(unittest.TestCase):
             g.narrar_com_limite(pronto, Path(work))
             self.assertEqual(voz.call_count, 1)
 
+    def test_parametros_sem_sinal_sao_normalizados(self):
+        self.assertEqual(g.parametro_de_voz('0Hz', 'Hz', 'VOZ_PITCH'), '+0Hz')
+        self.assertEqual(g.parametro_de_voz('20Hz', 'Hz', 'VOZ_PITCH'), '+20Hz')
+        self.assertEqual(g.parametro_de_voz('-20%', '%', 'VOZ_RATE'), '-20%')
+        with self.assertRaises(ValueError):
+            g.parametro_de_voz('devagar', '%', 'VOZ_RATE')
+
+    def test_edge_repete_falha_e_preserva_voz_escolhida(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+        class Falha:
+            async def stream(self):
+                yield {'type': 'audio', 'data': b'parcial'}
+                raise g.edge_tts.exceptions.NoAudioReceived('falha')
+        class Sucesso:
+            async def stream(self):
+                yield {'type': 'audio', 'data': b'audio completo'}
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(g.config, 'VOZ', 'pt-PT-DuarteNeural', create=True), \
+             patch.object(g.edge_tts, 'Communicate', side_effect=[Falha(), Sucesso()]) as tts, \
+             patch.object(g.asyncio, 'sleep', new_callable=AsyncMock):
+            destino = Path(work) / 'voz.mp3'
+            asyncio.run(g._gerar_voz_edge_tts_async('Texto.', destino))
+            self.assertEqual(destino.read_bytes(), b'audio completo')
+            self.assertFalse(destino.with_name('voz.mp3.part').exists())
+            self.assertEqual(tts.call_count, 2)
+            self.assertTrue(all(c.args[1] == 'pt-PT-DuarteNeural' for c in tts.call_args_list))
+
+    def test_edge_falha_final_preserva_audio_existente(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+        class Falha:
+            async def stream(self):
+                yield {'type': 'audio', 'data': b'incompleto'}
+                raise g.edge_tts.exceptions.NoAudioReceived('falha')
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(g.edge_tts, 'Communicate', return_value=Falha()) as tts, \
+             patch.object(g.asyncio, 'sleep', new_callable=AsyncMock):
+            destino = Path(work) / 'teste_voz.mp3'
+            destino.write_bytes(b'amostra anterior')
+            with self.assertRaisesRegex(RuntimeError, 'após 3 tentativas'):
+                asyncio.run(g._gerar_voz_edge_tts_async('Texto.', destino))
+            self.assertEqual(tts.call_count, 3)
+            self.assertEqual(destino.read_bytes(), b'amostra anterior')
+            self.assertFalse(destino.with_name('teste_voz.mp3.part').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

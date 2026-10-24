@@ -281,17 +281,44 @@ Use transições suaves; mantenha consistência de local e pessoas se aparecerem
 # 3. Gerar voz — edge-tts (grátis, padrão atual) ou ElevenLabs (pago,
 # melhor qualidade, desligado por padrão até você decidir ativar)
 # ----------------------------------------------------------------
+def parametro_de_voz(valor, unidade: str, nome: str) -> str:
+    texto = str(valor).strip()
+    if not re.fullmatch(r"[+-]?\d+" + re.escape(unidade), texto):
+        raise ValueError(f"{nome} inválido: use um valor como -20% para velocidade ou +0Hz para tom.")
+    return texto if texto.startswith(("+", "-")) else "+" + texto
+
+
 async def _gerar_voz_edge_tts_async(texto: str, audio_path: Path):
-    voz = getattr(config, "VOZ", VOZ)
-    # rate: velocidade da fala (ex: "-10%" fala mais devagar, "+15%" mais rápido)
-    # pitch: tom da voz (ex: "-5Hz" fica mais grave, "+5Hz" mais aguda)
-    rate = getattr(config, "VOZ_RATE", "-20%")
-    pitch = getattr(config, "VOZ_PITCH", "-12Hz")
-    communicate = edge_tts.Communicate(texto, voz, rate=rate, pitch=pitch)
-    with open(audio_path, "wb") as f:
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                f.write(chunk["data"])
+    voz = str(getattr(config, "VOZ", VOZ)).strip()
+    rate = parametro_de_voz(getattr(config, "VOZ_RATE", "-20%"), "%", "VOZ_RATE")
+    pitch = parametro_de_voz(getattr(config, "VOZ_PITCH", "-12Hz"), "Hz", "VOZ_PITCH")
+    temporario = audio_path.with_name(audio_path.name + ".part")
+    try:
+        for tentativa in range(3):
+            try:
+                communicate = edge_tts.Communicate(texto, voz, rate=rate, pitch=pitch)
+                with open(temporario, "wb") as f:
+                    async for chunk in communicate.stream():
+                        if chunk["type"] == "audio":
+                            f.write(chunk["data"])
+                if temporario.stat().st_size == 0:
+                    raise edge_tts.exceptions.NoAudioReceived("Nenhum áudio recebido.")
+                temporario.replace(audio_path)
+                return
+            except (edge_tts.exceptions.NoAudioReceived, TimeoutError) as erro:
+                if tentativa == 2:
+                    raise RuntimeError(
+                        "Edge TTS não retornou áudio após 3 tentativas. "
+                        f"Voz mantida: {voz}; velocidade: {rate}; tom: {pitch}. "
+                        "Pode ser indisponibilidade do serviço ou incompatibilidade dos parâmetros. "
+                        "Confira o nome exato da voz e teste com --teste-voz. "
+                        "Depois repita --roteiro com o arquivo salvo, sem nova chamada à Anthropic. "
+                        "Nenhuma imagem foi solicitada nesta etapa.") from erro
+                espera = 2 * (tentativa + 1)
+                print(f"    Edge TTS sem áudio; nova tentativa {tentativa + 2}/3 em {espera}s, com a mesma voz.")
+                await asyncio.sleep(espera)
+    finally:
+        temporario.unlink(missing_ok=True)
 
 
 def gerar_voz_elevenlabs(texto: str, audio_path: Path):

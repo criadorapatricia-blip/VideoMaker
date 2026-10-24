@@ -103,3 +103,16 @@ segunda chamada automática. Se mesmo assim a voz ficar longa, para antes das im
 
 Para aproveitar o roteiro que falhou, use `--roteiro` apontando para o arquivo
 salvo no mesmo dia. Não use `--retomar`: ele reutilizaria a narração antiga longa.
+
+## Quando o Edge TTS não devolve áudio
+
+A geração de cada trecho faz até três tentativas, com a mesma voz, velocidade
+e tom escolhidos no config.py. Há pequenas esperas entre tentativas. Isso ajuda
+em falhas transitórias, mas não garante funcionamento de parâmetros incompatíveis.
+Após a terceira falha, para com mensagem clara antes das imagens.
+
+Valores de tom sem sinal, como `0Hz` e `20Hz`, são normalizados para `+0Hz` e
+`+20Hz`, sem alterar seu significado. Parâmetros inválidos recebem uma explicação.
+Amostras anteriores não são sobrescritas por áudio parcial de uma tentativa falha.
+Se a falha persistir, teste a voz com `--teste-voz` e confira o nome exato retornado
+por `python -m edge_tts --list-voices`. Não é necessário mudar de voz automaticamente.
