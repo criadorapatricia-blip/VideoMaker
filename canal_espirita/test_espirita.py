@@ -131,6 +131,47 @@ class EspiritaTest(unittest.TestCase):
             self.assertEqual(tts.call_args.kwargs['rate'], '-20%')
             self.assertEqual(tts.call_args.kwargs['pitch'], '-12Hz')
 
+    def test_texto_longo_e_compactado_em_frases_completas(self):
+        resposta = dados()
+        for cena in resposta['plano_cenas']:
+            cena['narracao'] = ' '.join(['Precisamos aprender a reconhecer nossas escolhas e ajudar o próximo.'] * 4)
+        pronto = g.aplicar_data(g.preparar_roteiro(resposta), g.contexto_do_dia(datetime(2026, 10, 24)))
+        curto = g.limitar_texto_devocional(pronto)
+        self.assertLessEqual(len(curto['roteiro'].split()), 70)
+        self.assertEqual(len(curto['plano_cenas']), 6)
+        self.assertTrue(curto['roteiro'].startswith('Hoje é sábado, 24 de outubro de 2026.'))
+        self.assertTrue(all(c['narracao'].endswith('.') for c in curto['plano_cenas']))
+        g.validar_plano_cenas(curto)
+
+    def test_texto_curto_preserva_conteudo(self):
+        pronto = g.aplicar_data(g.preparar_roteiro(dados()), g.contexto_do_dia(datetime(2026, 10, 24)))
+        self.assertEqual(g.limitar_texto_devocional(pronto), pronto)
+
+    def test_duracao_longa_tenta_uma_unica_voz_menor(self):
+        resposta = dados()
+        for cena in resposta['plano_cenas']:
+            cena['narracao'] = 'Escolho agir com bondade e aprender com minhas dificuldades.'
+        pronto = g.aplicar_data(g.preparar_roteiro(resposta), g.contexto_do_dia(datetime(2026, 10, 24)))
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(g, 'gerar_narracao_cenas', return_value=(Path('voz.wav'), [])) as voz, \
+             patch.object(g, 'obter_duracao_segundos', return_value=111.1), \
+             patch.object(g.config, 'USAR_ELEVENLABS', False, create=True), \
+             patch.object(g.anthropic, 'Anthropic') as api:
+            curto, _, _ = g.narrar_com_limite(pronto, Path(work))
+            self.assertEqual(voz.call_count, 2)
+            self.assertLess(len(curto['roteiro'].split()), len(pronto['roteiro'].split()))
+            self.assertTrue((Path(work) / 'roteiro_antes_ajuste.json').exists())
+            api.assert_not_called()
+
+    def test_elevenlabs_nao_recebe_nova_chamada_paga_automatica(self):
+        pronto = g.aplicar_data(g.preparar_roteiro(dados()), g.contexto_do_dia(datetime(2026, 10, 24)))
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(g, 'gerar_narracao_cenas', return_value=(Path('voz.wav'), [])) as voz, \
+             patch.object(g, 'obter_duracao_segundos', return_value=111.1), \
+             patch.object(g.config, 'USAR_ELEVENLABS', True, create=True):
+            g.narrar_com_limite(pronto, Path(work))
+            self.assertEqual(voz.call_count, 1)
+
 
 if __name__ == '__main__':
     unittest.main()

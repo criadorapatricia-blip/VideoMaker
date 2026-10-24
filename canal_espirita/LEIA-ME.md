@@ -59,7 +59,7 @@ no Windows. Mantenha revisão e postagem manuais nesta fase.
 
 ## Revisão da voz: fala lenta e texto curto
 
-O roteiro agora pede 65 a 80 palavras antes da abertura com dia e data.
+O roteiro pede 45 a 55 palavras antes da abertura com dia e data.
 A duração não é mais ajustada acelerando a voz: se faltar tempo, o programa
 acrescenta pausas entre as cenas e após a prece. As legendas desaparecem nas
 pausas. Se a fala passar de 65 segundos, a execução para antes das imagens,
@@ -86,3 +86,20 @@ Cria `teste_voz.mp3` nesta pasta, sem Anthropic, Stability ou ElevenLabs.
 Requer internet para o Edge TTS. A amostra permite avaliar o timbre no seu PC;
 testes locais com áudio sintético não avaliam a naturalidade da voz real.
 Use uma geração nova para avaliar a nova voz: `--retomar` reutiliza o áudio salvo.
+
+## Controle de texto antes de narrar
+
+O programa conta todas as palavras, incluindo dia e data. Acima de 70 palavras,
+tenta aproveitar uma frase completa por cena; se não couber, usa uma prece autoral
+local mais breve com seis descrições visuais próprias. Não corta palavras no meio
+e não pede outra resposta à Anthropic. O texto original fica preservado em
+`roteiro_antes_ajuste.json`, e o texto realmente narrado fica em `roteiro.json`.
+
+Se a voz Edge TTS ainda superar 65 segundos, faz no máximo uma nova narração de
+um texto local ainda menor, sem Anthropic ou Stability. Essa alternativa pode mudar
+a reflexão para uma prece breve de gratidão e aperfeiçoamento moral. Não é um
+resumo semântico garantido do texto original. ElevenLabs pago não recebe essa
+segunda chamada automática. Se mesmo assim a voz ficar longa, para antes das imagens.
+
+Para aproveitar o roteiro que falhou, use `--roteiro` apontando para o arquivo
+salvo no mesmo dia. Não use `--retomar`: ele reutilizaria a narração antiga longa.

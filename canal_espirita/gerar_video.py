@@ -155,13 +155,83 @@ def aplicar_data(dados: dict, contexto: dict) -> dict:
     return dados
 
 
+def limitar_texto_devocional(dados: dict, limite: int = 70, forcar: bool = False) -> dict:
+    """Compacta localmente em frases completas; nunca pede outro roteiro pago."""
+    if not forcar and len(dados["roteiro"].split()) <= limite:
+        return dados
+    contexto = contexto_do_dia(datetime.fromisoformat(dados["data_mensagem"]))
+    abertura = contexto["abertura"]
+    # Primeiro aproveita uma frase curta completa de cada cena, se isso couber.
+    cenas = [dict(c) for c in dados["plano_cenas"]]
+    for i, cena in enumerate(cenas):
+        texto = cena["narracao"]
+        if i == 0 and texto.startswith(abertura):
+            texto = texto[len(abertura):].strip()
+        frases = re.split(r"(?<=[.!?])\s+", texto)
+        cena["narracao"] = frases[0].strip()
+    texto = abertura + " " + " ".join(c["narracao"] for c in cenas)
+    if (not forcar and all(c["narracao"] for c in cenas)
+            and len(texto.split()) <= limite):
+        cenas[0]["narracao"] = abertura + " " + cenas[0]["narracao"]
+    else:
+        # Prece autoral local, sem atribuição a Kardec, quando não há frases
+        # completas curtas o bastante. Descrições visuais também são trocadas.
+        normais = [
+            "Deus, agradeço por este novo dia.",
+            "Ajuda-me a reconhecer minhas próprias falhas.",
+            "Que eu escolha agir com bondade.",
+            "Ensina-me a compreender antes de julgar.",
+            "Que minhas atitudes levem paz ao próximo.",
+            "Dá-me coragem para melhorar, um passo por vez.",
+        ]
+        breves = ["Agradeço pela vida.", "Desejo aprender.", "Escolho fazer o bem.",
+                  "Quero compreender e perdoar.", "Que eu sirva com amor.", "Deus, guia meus passos."]
+        frases = normais if len((abertura + " " + " ".join(normais)).split()) <= limite else breves
+        visuais = ["a peaceful sunrise over a garden", "an adult reflecting beside a window",
+                   "adult hands gently caring for a small plant", "two adults talking calmly in a garden",
+                   "an adult helping another adult carry a basket", "a quiet garden path in warm morning light"]
+        cenas = [{"narracao": frase, "visual": visual + ", photorealistic, no text",
+                  "busca": visual, "corte": "suave"} for frase, visual in zip(frases, visuais)]
+        cenas[0]["narracao"] = abertura + " " + cenas[0]["narracao"]
+    pronto = {**dados, "plano_cenas": cenas,
+              "roteiro": " ".join(c["narracao"] for c in cenas),
+              "compactacao_local": True}
+    if len(pronto["roteiro"].split()) > limite:
+        raise ValueError("Não foi possível compactar o texto sem cortar frases. Nenhuma imagem foi solicitada.")
+    validar_plano_cenas(pronto)
+    print(f"    Texto compactado localmente para {len(pronto['roteiro'].split())} palavras, incluindo a data.")
+    return pronto
+
+
+def narrar_com_limite(dados: dict, pasta: Path) -> tuple[dict, Path, list]:
+    """Confere palavras antes da voz e tempo antes de qualquer imagem."""
+    original = pasta / "roteiro_antes_ajuste.json"
+    if not original.exists():
+        original.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+    dados = limitar_texto_devocional(dados)
+    (pasta / "roteiro.json").write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"    Narração: {len(dados['roteiro'].split())} palavras, incluindo dia e data.")
+    audio, segmentos = gerar_narracao_cenas(dados["plano_cenas"], pasta)
+    duracao = obter_duracao_segundos(audio)
+    if duracao > DURACAO_MAXIMA and not getattr(config, "USAR_ELEVENLABS", False):
+        # Edge TTS não usa Anthropic/Stability; limita a uma nova narração curta.
+        limite = max(36, min(55, int(len(dados["roteiro"].split()) * 52 / duracao)))
+        curto = limitar_texto_devocional(dados, limite=limite, forcar=True)
+        if curto["roteiro"] != dados["roteiro"]:
+            print("    A fala ainda ficou longa. Uma única nova narração Edge TTS será feita com texto menor.")
+            dados = curto
+            (pasta / "roteiro.json").write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+            audio, segmentos = gerar_narracao_cenas(dados["plano_cenas"], pasta)
+    return dados, audio, segmentos
+
+
 def gerar_roteiro(pasta: Path) -> dict:
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
     contexto = contexto_do_dia()
     prompt = f"""Crie uma reflexão devocional AUTORAL em português brasileiro, inspirada
 nos princípios do Espiritismo de Allan Kardec. Tema: {escolher_categoria()}.
 Contexto real do computador: {contexto['abertura']}
-Use 65 a 80 palavras no total, em EXATAMENTE SEIS cenas, terminando numa prece
+Use 45 a 55 palavras no total, em EXATAMENTE SEIS cenas, terminando numa prece
 breve a Deus. Frases curtas, com pontuação natural para pausas. Não acrescente
 mais texto para preencher tempo: o programa reserva pausas para reflexão.
 Tom acolhedor, sereno, fraterno e esperançoso, sem suspense.
@@ -956,7 +1026,7 @@ def main():
         print(f"    Categoria: {escolher_categoria()}")
         print(f"    Tema: {dados['tema']}")
         print("2/5 Gerando voz e legenda...")
-        audio_path, segmentos = gerar_narracao_cenas(dados["plano_cenas"], pasta_trabalho)
+        dados, audio_path, segmentos = narrar_com_limite(dados, pasta_trabalho)
     if len(segmentos) > MAX_IMAGENS:
         raise ValueError("Essa execução antiga tem mais de 6 cenas. Para o novo formato econômico, "
                          "execute python gerar_video.py para criar um vídeo novo.")
