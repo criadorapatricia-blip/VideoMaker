@@ -218,6 +218,26 @@ class EspiritaTest(unittest.TestCase):
             self.assertEqual(destino.read_bytes(), b'amostra anterior')
             self.assertFalse(destino.with_name('teste_voz.mp3.part').exists())
 
+    def test_montagem_sem_onda_preserva_logo_musica_e_legenda(self):
+        with tempfile.TemporaryDirectory() as work:
+            p = Path(work)
+            legenda = p / 'legenda.ass'
+            legenda.write_text(g.CABECALHO_ASS)
+            logo = p / 'logo.png'
+            logo.write_bytes(b'logo simulada')
+            with patch.object(g, 'LOGO_FAIXA_PATH', logo), \
+                 patch.object(g, 'obter_duracao_segundos', return_value=2), \
+                 patch.object(g.subprocess, 'run') as ffmpeg:
+                g.montar_video([p / 'clipe.mp4'], p / 'voz.wav', legenda,
+                               p / 'final.mp4', p / 'musica.wav')
+                comando = ffmpeg.call_args.args[0]
+                filtro = comando[comando.index('-filter_complex') + 1]
+                self.assertNotIn('showwaves', filtro)
+                self.assertNotIn('drawbox', filtro)
+                self.assertIn('subtitles=', filtro)
+                self.assertIn('overlay=0:main_h-overlay_h', filtro)
+                self.assertIn('sidechaincompress', filtro)
+
 
 if __name__ == '__main__':
     unittest.main()

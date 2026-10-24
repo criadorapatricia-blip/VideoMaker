@@ -27,7 +27,7 @@ músicas ou vídeos gerados. Não há agendamento novo; o do suspense continua i
   próprio; a naturalidade precisa ser avaliada ouvindo seu primeiro teste.
 - Até seis imagens Stability, vídeo de 62–65 segundos, legenda e movimento suave.
 - Música própria, normalizada, com redução automática durante a fala.
-- Onda em dourado suave. Nenhuma logo do suspense é baixada ou usada.
+- Sem onda sonora ou caixa escura no alto. Música, narração e faixa da marca permanecem.
 - Para acrescentar a identidade futura, salve uma faixa horizontal 6:1 em
   `assets/logo_faixa.png`. A marca e o nome deste canal ainda não foram definidos.
 - Textos autorais, não citações ou mensagens atribuídas a Kardec/espíritos.
@@ -124,3 +124,5 @@ por `python -m edge_tts --list-voices`. Não é necessário mudar de voz automat
 abaixo das legendas. Para instalar a faixa numa pasta já existente, basta salvar
 o arquivo nesse caminho; não altere o config.py ou as músicas.
 O pacote ZIP inclui as duas imagens. Elas não usam créditos das suas APIs.
+
+A onda sonora foi removida apenas deste canal. Para atualizar, substitua somente gerar_video.py; mantenha config.py e músicas.

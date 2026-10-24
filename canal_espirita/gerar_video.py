@@ -819,7 +819,7 @@ def montar_video(
     if not tem_logo:
         print(f"    (sem faixa de logo — arquivo não encontrado em {LOGO_FAIXA_PATH})")
 
-    def _rodar(com_legenda: bool, com_onda: bool):
+    def _rodar(com_legenda: bool):
         comando = [
             "ffmpeg", "-y", "-filter_complex_threads", "2",
             "-i", "concatenado.mp4",  # input 0: vídeo
@@ -843,26 +843,9 @@ def montar_video(
             # Fonte, contorno e entrada suave são definidos no arquivo ASS.
             filtro_video += f",subtitles={legenda_path.name}"
 
-        if com_onda:
-            # Onda amarela encorpada, com o fundo escuro ainda discreto.
-            filtro_video += (
-                ",drawbox=x=40:y=160:w=1000:h=220:"
-                "color=black@0.16:t=fill[base]"
-            )
-            filtro_onda = (
-                "[1:a]aformat=channel_layouts=mono,"
-                "acompressor=threshold=0.125:ratio=4:attack=20:release=180:makeup=1,"
-                "volume=1.0,showwaves=s=960x180:mode=cline:rate=30:"
-                "colors=0xE5C777:scale=sqrt:draw=full,format=rgba,"
-                "colorchannelmixer=aa=0.95[onda]"
-            )
-            filtro_video += (
-                f";{filtro_onda};[base][onda]overlay=(main_w-overlay_w)/2:180[comonda]"
-            )
-            label_atual = "comonda"
-        else:
-            filtro_video += "[comonda]"
-            label_atual = "comonda"
+        # Este canal usa somente as imagens, legendas e a faixa da marca.
+        filtro_video += "[base_video]"
+        label_atual = "base_video"
 
         if tem_logo:
             # Faixa de marca fixa no rodapé do vídeo — bem abaixo de onde a
@@ -907,7 +890,7 @@ def montar_video(
     if not legenda_ok:
         raise RuntimeError("Legenda ausente: vídeo não será enviado sem legenda.")
     # Uma falha de montagem deve ficar visível, sem publicar uma versão degradada.
-    _rodar(com_legenda=True, com_onda=True)
+    _rodar(com_legenda=True)
 
 
 # ----------------------------------------------------------------
