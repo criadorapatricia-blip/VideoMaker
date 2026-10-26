@@ -208,11 +208,45 @@ def aplicar_cidade_ao_roteiro(dados: dict, cidade: dict) -> dict:
     pronto = preparar_roteiro(dados)
     primeira = pronto["plano_cenas"][0]["narracao"]
     primeira_frase = re.split(r"(?<=[.!?])\s+", primeira)[0]
-    if not re.search(r"\b" + re.escape(cidade["nome"]) + r"\b", primeira_frase, re.IGNORECASE):
+    padrao_cidade = r"\b" + re.escape(cidade["nome"]) + r"\b"
+    no_titulo = re.search(padrao_cidade, pronto["tema"], re.IGNORECASE)
+    if not no_titulo and not re.search(padrao_cidade, primeira_frase, re.IGNORECASE):
         pronto["plano_cenas"][0]["narracao"] = f"Em {cidade['nome']}, tudo começou assim. {primeira}"
         pronto["roteiro"] = " ".join(c["narracao"] for c in pronto["plano_cenas"])
     pronto["cidade"] = cidade
     pronto["aviso_ficcao"] = "História fictícia ambientada no Brasil."
+    validar_plano_cenas(pronto)
+    return pronto
+
+
+CTA_SUSPENSE = "Já segue o canal para ver mais histórias como essa."
+
+
+def aplicar_abertura_cta(dados: dict) -> dict:
+    """Título e CTA são narrados e legendados na primeira das seis cenas."""
+    pronto = preparar_roteiro(dados)
+    abertura_salva = pronto.get("abertura_cta")
+    if abertura_salva is not None:
+        if not isinstance(abertura_salva, dict):
+            raise ValueError("Metadados de abertura inválidos no roteiro salvo.")
+        texto_salvo = abertura_salva.get("texto")
+        if not isinstance(texto_salvo, str) or not texto_salvo or not pronto["roteiro"].startswith(texto_salvo):
+            raise ValueError("A abertura salva não corresponde ao texto; revise o roteiro antes de narrar.")
+        return pronto  # Reutilizar --roteiro não duplica título ou CTA.
+    titulo_original = pronto["tema"]
+    titulo = re.sub(r"\s+", " ", titulo_original).strip(' \"\'').rstrip('.!?')
+    if len(titulo.split()) > 7:
+        candidato = re.split(r"[:;—–.!?]", titulo, maxsplit=1)[0].strip()
+        titulo = candidato if candidato and len(candidato.split()) <= 7 else "O segredo daquela noite"
+    abertura = f"{titulo}. {CTA_SUSPENSE}"
+    pronto["titulo_original"] = titulo_original
+    pronto["tema"] = titulo
+    if isinstance(pronto.get("cidade"), dict):
+        pronto = aplicar_cidade_ao_roteiro(pronto, pronto["cidade"])
+    pronto["historia_sem_abertura"] = pronto["roteiro"]
+    pronto["plano_cenas"][0]["narracao"] = abertura + " " + pronto["plano_cenas"][0]["narracao"]
+    pronto["roteiro"] = " ".join(c["narracao"] for c in pronto["plano_cenas"])
+    pronto["abertura_cta"] = {"titulo": titulo, "cta": CTA_SUSPENSE, "texto": abertura}
     validar_plano_cenas(pronto)
     return pronto
 
@@ -224,14 +258,20 @@ def gerar_roteiro(pasta: Path) -> dict:
     prompt = f"""Escreva uma história curta de suspense psicológico FICTÍCIA, em primeira
 pessoa, em português brasileiro. Categoria: {escolher_categoria()}.
 AMBIENTAÇÃO OBRIGATÓRIA: {cidade['nome']}, {cidade['uf']}, Brasil.
-Mencione o nome exato "{cidade['nome']}" na PRIMEIRA FRASE do gancho, naturalmente.
+Crie um título curto, de 4 a 7 palavras.
+Se o título mencionar "{cidade['nome']}", não repita a cidade logo no gancho.
+Caso contrário, mencione o nome exato "{cidade['nome']}" na primeira frase da história.
+O programa narrará título e uma chamada curta para seguir o canal ANTES da história.
+Não escreva título ou chamada nos trechos narracao: o programa os acrescentará.
 A cidade é real, mas personagens, imóveis e acontecimentos são inventados.
 Não use nomes de pessoas reais, endereços ou estabelecimentos identificáveis.
 Não apresente o relato como caso real, notícia ou lenda documentada.
 Não invente fatos históricos nem características locais específicas.
 Não transfira a história para outra cidade. A localização deve fazer parte da
 situação, sem transformar o roteiro numa apresentação turística.
-Use 115 a 140 palavras de narração NO TOTAL, divididas em exatamente SEIS cenas.
+Use 100 a 115 palavras para a HISTÓRIA inteira, divididas em exatamente SEIS cenas.
+Esse orçamento já reserva espaço para o título e a chamada, acrescentados pelo programa.
+Não aumente o texto para compensar a abertura.
 Comece com um gancho, desenvolva contexto e sinais estranhos, aumente a tensão
 e termine com uma reviravolta. Use personagens e imóveis inventados, sem violência
 gráfica. Cada cena deve conter uma ação visual principal e terminar em pausa natural.
@@ -1004,6 +1044,7 @@ def main():
             print("    Usando roteiro salvo (sem chamada à Anthropic).")
         else:
             dados = gerar_roteiro(pasta_trabalho)
+        dados = aplicar_abertura_cta(dados)
         (pasta_trabalho / "roteiro.json").write_text(
             json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"    Categoria: {escolher_categoria()}")

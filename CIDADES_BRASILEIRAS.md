@@ -17,8 +17,9 @@ já usadas, conforme os vídeos anteriores. Um roteiro inválido não reserva ci
 Se a montagem falhar depois, a cidade continua reservada e o roteiro pode ser retomado.
 Não envie históricos ou configurações com credenciais para o GitHub.
 
-O nome da cidade deve aparecer na primeira frase. Se o modelo esquecer, o programa
-acrescenta uma abertura curta com o nome e atualiza a narração completa.
+O nome da cidade aparece no título narrado ou na primeira frase da história.
+Se o modelo esquecer, o programa acrescenta uma abertura curta com o nome e
+atualiza a narração completa.
 Personagens, imóveis e acontecimentos continuam fictícios. Os prompts orientam
 não usar pessoas, endereços ou estabelecimentos identificáveis e não atribuir
 fatos históricos inventados à cidade. Imagens são ilustrações geradas, não registros
