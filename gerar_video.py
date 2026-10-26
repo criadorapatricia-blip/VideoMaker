@@ -37,6 +37,7 @@ BASE_DIR = Path(__file__).parent
 SAIDA_DIR = BASE_DIR / "saida"
 MUSICA_DIR = BASE_DIR / "musica"
 TEMAS_USADOS_PATH = BASE_DIR / "temas_usados.json"
+CIDADES_USADAS_PATH = BASE_DIR / "cidades_usadas.json"
 SAIDA_DIR.mkdir(exist_ok=True)
 MUSICA_DIR.mkdir(exist_ok=True)
 
@@ -78,8 +79,8 @@ def salvar_tema_usado(tema: str):
 # — assim o tema muda de fato, e não só o título do mesmo assunto.
 #
 # Nicho: histórias de suspense/mistério curtas e 100% FICTÍCIAS (estilo
-# "creepypasta"). Personagens e locais inventados — isso evita qualquer
-# risco de errar fatos sobre pessoas ou casos reais.
+# "creepypasta"). Cidades brasileiras reais servem apenas de ambientação;
+# personagens, imóveis e acontecimentos continuam inventados.
 CATEGORIAS = [
     "Suspense psicológico em casa/apartamento",
     "Mistério em cidade pequena isolada",
@@ -137,13 +138,102 @@ def preparar_roteiro(dados: dict) -> dict:
     return pronto
 
 
+CAPITAIS_BRASILEIRAS = [
+    "Rio Branco/AC", "Maceió/AL", "Macapá/AP", "Manaus/AM",
+    "Salvador/BA", "Fortaleza/CE", "Brasília/DF", "Vitória/ES",
+    "Goiânia/GO", "São Luís/MA", "Cuiabá/MT", "Campo Grande/MS",
+    "Belo Horizonte/MG", "Belém/PA", "João Pessoa/PB", "Curitiba/PR",
+    "Recife/PE", "Teresina/PI", "Rio de Janeiro/RJ", "Natal/RN",
+    "Porto Alegre/RS", "Porto Velho/RO", "Boa Vista/RR",
+    "Florianópolis/SC", "São Paulo/SP", "Aracaju/SE", "Palmas/TO",
+]
+CIDADES_GRANDES_BRASILEIRAS = [
+    "Campinas/SP", "Guarulhos/SP", "São Bernardo do Campo/SP",
+    "Santo André/SP", "Osasco/SP", "Sorocaba/SP", "Ribeirão Preto/SP",
+    "São José dos Campos/SP", "São José do Rio Preto/SP", "Santos/SP",
+    "Piracicaba/SP", "Jundiaí/SP", "Bauru/SP",
+    "Uberlândia/MG", "Contagem/MG", "Juiz de Fora/MG",
+    "Betim/MG", "Montes Claros/MG", "Uberaba/MG",
+    "Joinville/SC", "Blumenau/SC", "Chapecó/SC", "Itajaí/SC",
+    "Londrina/PR", "Maringá/PR", "Cascavel/PR",
+    "Ponta Grossa/PR", "Foz do Iguaçu/PR",
+    "Caxias do Sul/RS", "Pelotas/RS", "Canoas/RS", "Santa Maria/RS",
+    "Feira de Santana/BA", "Vitória da Conquista/BA",
+    "Caruaru/PE", "Petrolina/PE", "Jaboatão dos Guararapes/PE",
+    "Olinda/PE", "Ananindeua/PA", "Santarém/PA",
+    "Aparecida de Goiânia/GO", "Anápolis/GO",
+    "Serra/ES", "Vila Velha/ES", "Cariacica/ES",
+    "Duque de Caxias/RJ", "Niterói/RJ", "Nova Iguaçu/RJ",
+    "São Gonçalo/RJ", "Campina Grande/PB", "Mossoró/RN",
+    "Juazeiro do Norte/CE", "Maracanaú/CE", "Imperatriz/MA",
+    "Dourados/MS", "Rondonópolis/MT", "Várzea Grande/MT",
+    "Arapiraca/AL", "Parnaíba/PI",
+]
+
+
+def carregar_cidades_usadas() -> list:
+    if not CIDADES_USADAS_PATH.exists():
+        # Já apareceram em vídeos anteriores informados pelo usuário.
+        return ["Ribeirão Preto/SP", "Belo Horizonte/MG"]
+    try:
+        historico = json.loads(CIDADES_USADAS_PATH.read_text(encoding="utf-8-sig"))
+    except (ValueError, OSError) as erro:
+        raise ValueError("Não foi possível ler cidades_usadas.json; revise o arquivo antes de gerar.") from erro
+    if not isinstance(historico, list) or not all(isinstance(c, str) for c in historico):
+        raise ValueError("cidades_usadas.json deve conter uma lista de cidades em texto.")
+    return historico
+
+
+def escolher_cidade_brasileira() -> dict:
+    recentes = set(carregar_cidades_usadas()[-15:])
+    capitais = [c for c in CAPITAIS_BRASILEIRAS if c not in recentes]
+    grandes = [c for c in CIDADES_GRANDES_BRASILEIRAS if c not in recentes]
+    grupo = random.choices([capitais, grandes], weights=[55, 45], k=1)[0]
+    nome, uf = random.choice(grupo).rsplit("/", 1)
+    return {"nome": nome, "uf": uf}
+
+
+def registrar_cidade_usada(cidade: dict):
+    historico = carregar_cidades_usadas()
+    historico.append(f"{cidade['nome']}/{cidade['uf']}")
+    temporario = CIDADES_USADAS_PATH.with_name(CIDADES_USADAS_PATH.name + ".tmp")
+    try:
+        temporario.write_text(json.dumps(historico[-100:], ensure_ascii=False, indent=2), encoding="utf-8")
+        temporario.replace(CIDADES_USADAS_PATH)
+    except OSError as erro:
+        raise RuntimeError("O roteiro foi recebido, mas não foi possível salvar cidades_usadas.json.") from erro
+
+
+def aplicar_cidade_ao_roteiro(dados: dict, cidade: dict) -> dict:
+    pronto = preparar_roteiro(dados)
+    primeira = pronto["plano_cenas"][0]["narracao"]
+    primeira_frase = re.split(r"(?<=[.!?])\s+", primeira)[0]
+    if not re.search(r"\b" + re.escape(cidade["nome"]) + r"\b", primeira_frase, re.IGNORECASE):
+        pronto["plano_cenas"][0]["narracao"] = f"Em {cidade['nome']}, tudo começou assim. {primeira}"
+        pronto["roteiro"] = " ".join(c["narracao"] for c in pronto["plano_cenas"])
+    pronto["cidade"] = cidade
+    pronto["aviso_ficcao"] = "História fictícia ambientada no Brasil."
+    validar_plano_cenas(pronto)
+    return pronto
+
+
 def gerar_roteiro(pasta: Path) -> dict:
+    cidade = escolher_cidade_brasileira()
+    print(f"    Cidade sorteada: {cidade['nome']} ({cidade['uf']})")
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
     prompt = f"""Escreva uma história curta de suspense psicológico FICTÍCIA, em primeira
 pessoa, em português brasileiro. Categoria: {escolher_categoria()}.
+AMBIENTAÇÃO OBRIGATÓRIA: {cidade['nome']}, {cidade['uf']}, Brasil.
+Mencione o nome exato "{cidade['nome']}" na PRIMEIRA FRASE do gancho, naturalmente.
+A cidade é real, mas personagens, imóveis e acontecimentos são inventados.
+Não use nomes de pessoas reais, endereços ou estabelecimentos identificáveis.
+Não apresente o relato como caso real, notícia ou lenda documentada.
+Não invente fatos históricos nem características locais específicas.
+Não transfira a história para outra cidade. A localização deve fazer parte da
+situação, sem transformar o roteiro numa apresentação turística.
 Use 115 a 140 palavras de narração NO TOTAL, divididas em exatamente SEIS cenas.
 Comece com um gancho, desenvolva contexto e sinais estranhos, aumente a tensão
-e termine com uma reviravolta. Use personagens e locais inventados, sem violência
+e termine com uma reviravolta. Use personagens e imóveis inventados, sem violência
 gráfica. Cada cena deve conter uma ação visual principal e terminar em pausa natural.
 Não repita ideias recentes: {carregar_temas_usados()[-30:]}
 
@@ -156,7 +246,9 @@ Exemplo de estrutura (repita o objeto de cena até completar seis cenas):
 ]}}
 Os seis trechos narracao, juntos, formam a história inteira. NÃO inclua outra chave
 roteiro nem listas paralelas de cenas ou palavras-chave: escreva o texto uma única vez.
-Descrições visuais: ambientes e objetos cotidianos, adequados ao público geral,
+Descrições visuais: ambientes brasileiros plausíveis e objetos cotidianos,
+sem afirmar que as imagens mostram um imóvel real ou depender de monumentos.
+Adequados ao público geral,
 sem ferimentos, violência ou figuras ameaçadoras. Mantenha aparência do personagem
 e cenário consistentes. Não inclua placas ou texto legível nas imagens.
 Use corte seco no gancho e nas revelações; suave em passagens de tempo.
@@ -173,11 +265,15 @@ A imagem deve acompanhar a ação narrada sem antecipar a próxima cena."""
             raise ValueError("A resposta da IA foi interrompida pelo limite de saída.")
         texto = re.sub(r"^```(?:json)?\s*|\s*```$", "", texto).strip()
         dados = json.loads(texto)
-        return preparar_roteiro(dados)
+        pronto = aplicar_cidade_ao_roteiro(dados, cidade)
     except (ValueError, TypeError, KeyError, AttributeError) as erro:
         raise ValueError(
             f"Roteiro não aceito: {erro}\nResposta preservada em: {resposta_path.resolve()}\n"
             "Nenhum segundo roteiro foi solicitado e nenhuma imagem foi gerada.") from erro
+    # Reserva a cidade após validar o roteiro, inclusive se a montagem precisar
+    # ser retomada depois. Roteiros inválidos não entram no histórico.
+    registrar_cidade_usada(cidade)
+    return pronto
 
 
 # ----------------------------------------------------------------
@@ -945,7 +1041,8 @@ def main():
     montar_video(clipes, audio_path, legenda_path, video_final, musica_path, segmentos=segmentos)
 
     print("5/5 Enviando para aprovação no Telegram...")
-    enviar_para_telegram(video_final, f"Tema: {dados['tema']}\n\n{dados['roteiro']}")
+    aviso = dados.get("aviso_ficcao", "História fictícia.")
+    enviar_para_telegram(video_final, f"Tema: {dados['tema']}\n{aviso}\n\n{dados['roteiro']}")
 
     salvar_tema_usado(dados["tema"])
     print(f"[{datetime.now()}] Concluído! Vídeo em: {video_final}")
